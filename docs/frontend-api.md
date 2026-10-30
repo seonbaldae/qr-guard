@@ -11,6 +11,8 @@
 
 Vercel의 `api/analyze.py`, `api/health.py`, `api/capabilities.py`가 `app/public_api.py`의 앱을 사용합니다. 같은 HTTPS 출처의 경로에 네이티브 Functions로 배포하며 rewrite나 별도 백엔드 URL이 필요하지 않습니다. 이 API는 수정 중인 Docker 코드와 로컬 작업 저장소를 가져오지 않습니다.
 
+공개 주소는 [QR Guard](https://qr-guard-five.vercel.app/)입니다. 2026-10-31 Production 배포 후 로그인 쿠키 없이 `/api/health` 200과 실제 `/api/analyze` 응답을 확인했습니다. `example.com`의 Google 조회 완료·위협 미탐지와 Google 공식 피싱 테스트 주소의 위협 일치를 확인했으며, 공개 응답은 `mode: static`, 최종 주소 미확인·미리보기/신고 미제공을 유지했습니다. 소스·비밀 파일 경로의 404, 타 출처 요청의 403, 잘못된 URL의 422도 확인했습니다. 자세한 배포 결과는 [공개 배포 검증](public-deployment.md)을 참고하세요.
+
 `POST /api/analyze`
 
 ```json
@@ -52,7 +54,7 @@ node scripts/prepare-vercel.mjs --public
 PORT=8086 QR_GUARD_API=http://127.0.0.1:8001 node scripts/dev-server.mjs --public
 ```
 
-`http://127.0.0.1:8086/`을 엽니다. 이는 공개 배포 구성의 로컬 재현입니다. 실제 공개 URL의 배포 상태는 별도로 확인합니다.
+`http://127.0.0.1:8086/`을 엽니다. 이는 위 공개 배포 구성의 로컬 재현이며 실제 휴대전화 카메라 촬영 검증을 대신하지 않습니다.
 
 ## 로컬 Docker 실행
 
@@ -161,7 +163,7 @@ node scripts/dev-server.mjs
 
 별도 API 출처를 설정한다면 정확한 HTTPS 출처와 서버 CORS 설정을 함께 준비해야 합니다. Google 키는 백엔드 설정에만 넣습니다. 프런트는 검사 시작 전에 검사 URL이 Google에 전송된다는 안내를 표시합니다. 카메라 영상·QR 이미지는 업로드하지 않으며 URL·결과·신고 상태를 브라우저 저장소에 기록하지 않습니다.
 
-Vercel 배포 구성은 `dist/` 프런트와 별도로 빌드한 Python Functions를 같은 출처에 제공합니다. `.vercelignore`는 공개 API의 소스 의존성만 허용하며 Worker·로컬 작업 서버·테스트·비밀 파일은 제외합니다. Google 키는 Vercel 서버 환경 변수로만 설정하며 정적 파일에 포함하지 않습니다. 코드·로컬 검사 완료와 실제 공개 배포 완료를 구분해 보고합니다.
+Vercel 배포는 `dist/` 프런트와 별도로 빌드한 Python Functions를 같은 출처에 제공합니다. `.vercelignore`는 공개 API의 소스 의존성만 허용하며 Worker·로컬 작업 서버·테스트·비밀 파일은 제외합니다. 디렉터리 허용 규칙은 빌더가 조회하는 디렉터리 이름 자체와 그 하위 경로를 함께 허용하도록 유지합니다. Google 키는 Vercel 서버 환경 변수로만 설정하며 정적 파일에 포함하지 않습니다. 코드·로컬 검사·공개 HTTP 검증의 범위를 각각 기록합니다.
 
 ## 데모와 검증
 
