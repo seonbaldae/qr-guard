@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QR Guard 화면 통합 검증</title>
+    <link rel="stylesheet" href="../../src/styles/global.css">
+    <style>
+      .test-report { max-width: 980px; padding: 30px 22px; margin: auto; font: 14px/1.7 system-ui, sans-serif; }
+      .test-report h1 { font-size: 24px; }
+      [data-pass="true"] { color: #145437; }
+      [data-pass="false"] { color: #a32a24; }
+      #fixture { border-top: 1px solid #dde4d9; }
+    </style>
+  </head>
+  <body>
+    <section class="test-report" aria-labelledby="test-heading">
+      <h1 id="test-heading">QR Guard 화면 통합 검증</h1>
+      <p>실제 화면의 입력·버튼·open Shadow DOM을 사용합니다. API와 새 창 열기를 모의 처리하며 실제 카메라와 외부 사이트에 접속하지 않습니다.</p>
+      <p id="summary" role="status" aria-live="polite">검증 중…</p>
+      <ol id="results"></ol>
+    </section>
+    <div id="fixture"></div>
+    <script type="module" src="./ui.js"></script>
+  </body>
+</html>

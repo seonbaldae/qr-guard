@@ -1,0 +1,24 @@
+:root {
+  color-scheme: light;
+  --qr-bg: #f7f9f7;
+  --qr-surface: #fff;
+  --qr-ink: #202d28;
+  --qr-muted: #6d7972;
+  --qr-green: #174f3f;
+  --qr-accent: #dbefb9;
+  --qr-tint: #edf3ec;
+  --qr-border: #e3e8e1;
+  --qr-danger: #ae3f36;
+  --qr-font: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+  font-family: var(--qr-font);
+  color: var(--qr-ink);
+  background: var(--qr-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, select { font: inherit; }
+qr-app { display: block; min-height: 100svh; }
+noscript { display: block; padding: 30px; }
+::selection { background: #dbefb9; color: #174f3f; }
