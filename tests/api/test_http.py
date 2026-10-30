@@ -78,7 +78,7 @@ def test_unknown_ids_and_missing_routes():
 
 
 def test_unexpected_worker_error_finishes_all_pending_states():
-    async def broken_worker(*_args):
+    async def broken_worker(*_args, **_kwargs):
         raise RuntimeError("secret-test-value")
 
     async def scenario():

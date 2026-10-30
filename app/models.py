@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, field_validator
 from pydantic.alias_generators import to_camel
 
 from app.precheck.payload import normalize
@@ -76,6 +76,53 @@ class ScreenshotState(WireModel):
     error_code: str | None = None
 
 
+class FormObservation(WireModel):
+    method: StrictStr = Field(max_length=16)
+    action_host: StrictStr | None = Field(default=None, max_length=255, pattern=r"^[A-Za-z0-9._:\[\]-]+$")
+
+
+class DomAnalysis(WireModel):
+    page_title: StrictStr | None = Field(max_length=500)
+    password_field_count: int = Field(strict=True, ge=0, le=1000)
+    sensitive_field_types: list[Literal['password', 'otp', 'payment_card']] = Field(max_length=3)
+    forms: list[FormObservation] = Field(max_length=100)
+
+
+class NetworkAnalysis(WireModel):
+    request_hosts: list[StrictStr] = Field(max_length=200)
+    request_count: int = Field(strict=True, ge=0, le=10000)
+    blocked_request_count: int = Field(strict=True, ge=0, le=10000)
+
+
+class RedirectEdge(WireModel):
+    from_url: StrictStr = Field(alias='from', max_length=4096)
+    to: StrictStr = Field(max_length=4096)
+    status_code: int | None = Field(strict=True, ge=100, le=599)
+    type: Literal['http', 'client_navigation', 'unknown']
+    blocked: StrictBool
+
+
+class RedirectAnalysis(WireModel):
+    redirected: StrictBool
+    final_url: StrictStr | None = Field(max_length=4096)
+    redirect_chain: list[RedirectEdge] = Field(max_length=100)
+
+
+class LogoAnalysis(WireModel):
+    status: Literal['completed', 'unknown', 'failed', 'not_available']
+    detected_brand: StrictStr | None = Field(default=None, max_length=100)
+    similarity_score: float | None = Field(default=None, allow_inf_nan=False)
+    method: StrictStr | None = Field(default=None, max_length=100)
+    reference_version: StrictStr | None = Field(default=None, max_length=128)
+
+
+class DomainAnalysis(WireModel):
+    status: Literal['completed', 'unknown', 'not_available']
+    official_domain: StrictStr | None = Field(default=None, max_length=255)
+    observed_domain: StrictStr | None = Field(default=None, max_length=255)
+    domain_mismatch: StrictBool | None = None
+
+
 class SandboxResult(WireModel):
     status: StageStatus = "not_requested"
     skip_reason: Literal["known_malicious", "static_only"] | None = None
@@ -85,6 +132,11 @@ class SandboxResult(WireModel):
     signals: list[Signal] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     error_code: str | None = None
+    logo_analysis: LogoAnalysis | None = None
+    domain_analysis: DomainAnalysis | None = None
+    dom_analysis: DomAnalysis | None = None
+    network_analysis: NetworkAnalysis | None = None
+    redirect_analysis: RedirectAnalysis | None = None
 
 
 class VerdictResult(WireModel):

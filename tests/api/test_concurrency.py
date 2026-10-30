@@ -9,7 +9,8 @@ from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
-from app.worker import WorkerResult
+from app.worker import WorkerJob
+from .test_jobs_v03 import snapshot
 
 
 def test_worker_concurrency_is_bounded():
@@ -17,15 +18,10 @@ def test_worker_concurrency_is_bounded():
         application = create_app(Settings(max_worker_concurrency=1))
         image = BytesIO()
         Image.new("RGB", (1, 1)).save(image, format="PNG")
-        result = WorkerResult.model_validate({
-            "finalUrl": "https://demo.example.test/", "httpStatus": 200, "pageTitle": "Demo",
-            "passwordFieldCount": 0, "sensitiveFieldTypes": [], "forms": [], "requestHosts": [],
-            "redirected": False, "screenshotBase64": base64.b64encode(image.getvalue()).decode(),
-            "limitations": [],
-        })
+        result = WorkerJob.model_validate(snapshot())
         active = peak = calls = 0
 
-        async def slow_worker(*_args):
+        async def slow_worker(*_args, **_kwargs):
             nonlocal active, peak, calls
             calls += 1
             active += 1

@@ -12,7 +12,7 @@ import pytest
 
 from app.config import Settings
 from app.main import create_app
-from .support import fake_google, google_result
+from .support import fake_google, google_result, jobs_fixture_transport
 
 
 def worker_payload(**changes):
@@ -31,7 +31,7 @@ def worker_payload(**changes):
 def scan(settings, handler, body=None, *, threat_check=None):
     async def run():
         app = create_app(
-            settings, worker_transport=httpx.MockTransport(handler),
+            settings, worker_transport=jobs_fixture_transport(handler),
             threat_check=threat_check or fake_google(["https://listed.example.test/"]),
         )
         async with httpx.AsyncClient(
@@ -119,8 +119,9 @@ def test_plain_login_alone_is_not_suspicious(tmp_path):
     report, _ = scan(settings_with_feed(tmp_path), lambda _: httpx.Response(
         200, json=worker_payload(passwordFieldCount=1, sensitiveFieldTypes=["password"]),
     ))
-    assert report["verdict"]["level"] == "no_known_threat"
-    assert {e["kind"] for e in report["evidence"]} == {"password_field"}
+    # Without reliable automatic brand coverage, the v0.3 result must remain unknown.
+    assert report["verdict"]["level"] == "unknown"
+    assert any(e['kind'] == 'dom_observation' and e['data']['passwordFieldCount'] == 1 for e in report['evidence'])
 
 
 @pytest.mark.parametrize("reason, marker", [
@@ -159,7 +160,7 @@ def test_redirect_to_google_match_is_malicious_after_worker_completes(tmp_path):
     settings = settings_with_feed(tmp_path, demo_origins=(
         "https://demo.example.test", "https://listed.example.test",
     ))
-    final_url = "https://listed.example.test/?token=private"
+    final_url = "https://listed.example.test/"
     report, image = scan(settings, lambda _: httpx.Response(
         200, json=worker_payload(finalUrl=final_url, redirected=True),
     ), threat_check=fake_google([final_url]))
