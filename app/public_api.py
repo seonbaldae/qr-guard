@@ -120,10 +120,15 @@ async def _cloud_report(worker, scan_id, url, check, deadline):
             png = _decode_png(png)
         if result.screenshot_status != "ready":
             png = None
-        complete = bool(result.status == "completed" and result.inspection_complete and png)
+        policy_blocked = bool(result.error_code in {"unsafe_target", "worker_policy_blocked"} or (
+            result.network_analysis and result.network_analysis.blocked_request_count > 0
+        ))
+        complete = bool(result.status == "completed" and result.inspection_complete and png and result.final_url
+                        and result.http_status is not None and result.http_status < 400
+                        and result.dom_analysis and result.network_analysis and result.redirect_analysis and not policy_blocked)
         evidence, signals = _cloud_observations(result, scan_id)
         sandbox = SandboxResult(
-            status="completed" if complete else "failed", final_url=result.final_url,
+            status="completed" if complete else "blocked" if policy_blocked else "failed", final_url=result.final_url,
             http_status=result.http_status, signals=signals,
             screenshot=ScreenshotState(status="ready" if png else "failed", available=bool(png),
                                        captured_at=result.captured_at if png else None,

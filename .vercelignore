@@ -12,6 +12,7 @@
 /app/*
 !/app/__init__.py
 !/app/public_api.py
+!/app/cloud_worker.py
 !/app/config.py
 !/app/models.py
 !/app/static_adapter.py

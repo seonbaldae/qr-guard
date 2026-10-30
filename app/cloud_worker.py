@@ -249,7 +249,7 @@ class CloudWorkerClient:
                             result.error_code = "invalid_screenshot"
                     result.inspection_complete = bool(
                         process.returncode == 0 and result.inspection_complete and result.status == "completed" and result.final_url
-                        and result.http_status is not None and png and result.dom_analysis
+                        and result.http_status is not None and result.http_status < 400 and png and result.dom_analysis
                         and result.network_analysis and result.network_analysis.blocked_request_count == 0
                         and result.redirect_analysis
                     )

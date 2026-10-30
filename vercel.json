@@ -1,12 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "node scripts/prepare-vercel.mjs --public",
+  "buildCommand": "node scripts/prepare-vercel.mjs --public --cloud-preview",
   "installCommand": "",
   "outputDirectory": "dist",
   "functions": {
     "api/*.py": {
-      "maxDuration": 30,
+      "maxDuration": 120,
       "excludeFiles": "{worker/**,tests/**,docs/**,scripts/**,src/**,assets/**,dist/**,.venv/**,.git/**,.env*}"
     }
   },

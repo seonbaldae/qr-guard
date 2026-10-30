@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 // Packages public assets only. The Python function is built separately by Vercel.
 const flags = process.argv.slice(2);
-if (flags.some(flag => flag !== '--public')) throw new Error('Unsupported packaging option.');
+if (flags.some(flag => !['--public', '--cloud-preview'].includes(flag))) throw new Error('Unsupported packaging option.');
 const publicDeployment = flags.includes('--public');
+const cloudPreview = flags.includes('--cloud-preview');
+if (cloudPreview && !publicDeployment) throw new Error('Cloud preview requires the public deployment.');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = join(root, 'dist');
 const sources = new Map([
@@ -58,6 +60,6 @@ for (const [directory, extensions] of sources) {
 if (publicDeployment) {
   await writeFile(join(output, 'src', 'deployment-config.js'),
     "// Public configuration only. Server credentials never enter this file.\n" +
-    "export const deploymentConfig = Object.freeze({ scanTransport: 'direct', scanMode: 'static' });\n");
+    `export const deploymentConfig = Object.freeze({ scanTransport: 'direct', scanMode: '${cloudPreview ? 'sandbox' : 'static'}' });\n`);
 }
 process.stdout.write(`Prepared ${copied} frontend files in dist/.\n`);
