@@ -3,7 +3,7 @@ import { icon } from '../utils/icons.js';
 
 const labels={
   clear:{title:'검사 범위 내 위협 미탐지',copy:'사이트 주소를 확인한 뒤 이동해 주세요.',icon:'check'},
-  phishing:{title:'피싱 사이트로 판정됐어요',copy:'개인정보를 입력하지 말고 사이트를 닫아 주세요.',icon:'warning'},
+  phishing:{title:'피싱 사이트로 판정됐어요',copy:'이 사이트에 개인정보를 입력하지 마세요.',icon:'warning'},
   suspicious:{title:'사칭이 의심되는 사이트예요',copy:'접속하기 전에 공식 주소를 확인해 주세요.',icon:'warning'},
   inconclusive:{title:'안전 여부를 확인하지 못했어요',copy:'접속하기 전에 다시 검사해 주세요.',icon:'info'},
 };
