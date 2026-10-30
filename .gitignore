@@ -13,3 +13,7 @@ __pycache__/
 
 # 피싱 피드 다운로드본 (로컬 캐시)
 data/feeds/
+
+# Vercel local project state and generated static deployment output
+.vercel/
+dist/
