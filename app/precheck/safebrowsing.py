@@ -164,11 +164,93 @@ def _send(url: str, api_key: str) -> tuple[int, Any]:
                 if len(data) > 1024 * 1024:
                     return response.status_code, None
             try:
+                # v5 urls:search answers in Protobuf and rejects JSON output (alt=json -> 400).
+                if response.status_code == 200 and "protobuf" in response.headers.get("content-type", ""):
+                    return response.status_code, _decode_search_response(bytes(data))
                 return response.status_code, json.loads(data)
             except (ValueError, UnicodeDecodeError):
                 return response.status_code, None
         finally:
             response.close()
+
+
+# SearchUrlsResponse { repeated ThreatUrl threats = 1; Duration cache_duration = 2; }
+# ThreatUrl { string url = 1; repeated ThreatType threat_types = 2; }  Duration { int64 seconds = 1; int32 nanos = 2; }
+_THREAT_TYPE_NAMES = {1: "MALWARE", 2: "SOCIAL_ENGINEERING", 3: "UNWANTED_SOFTWARE", 4: "POTENTIALLY_HARMFUL_APPLICATION"}
+
+
+def _read_varint(data: bytes, pos: int) -> tuple[int, int]:
+    result = shift = 0
+    while True:
+        if pos >= len(data) or shift > 63:
+            raise ValueError("malformed varint")
+        byte = data[pos]
+        pos += 1
+        result |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return result, pos
+        shift += 7
+
+
+def _fields(data: bytes):
+    """Yield (field number, wire type, value) of one Protobuf message; value is an int or bytes."""
+    pos = 0
+    while pos < len(data):
+        tag, pos = _read_varint(data, pos)
+        number, wire = tag >> 3, tag & 7
+        if number == 0:
+            raise ValueError("invalid field number")
+        if wire == 0:
+            value, pos = _read_varint(data, pos)
+        elif wire == 2:
+            length, pos = _read_varint(data, pos)
+            if pos + length > len(data):
+                raise ValueError("truncated field")
+            value, pos = data[pos:pos + length], pos + length
+        elif wire in (1, 5):  # fixed64 / fixed32: not used by this response, skip
+            size = 8 if wire == 1 else 4
+            if pos + size > len(data):
+                raise ValueError("truncated field")
+            value, pos = None, pos + size
+        else:
+            raise ValueError("unsupported wire type")
+        yield number, wire, value
+
+
+def _decode_threat(data: bytes) -> dict[str, Any]:
+    threat: dict[str, Any] = {}
+    types: list[str] = []
+    for number, wire, value in _fields(data):
+        if number == 1 and wire == 2:
+            threat["url"] = value.decode("utf-8")
+        elif number == 2 and wire == 2:  # packed enum values
+            pos = 0
+            while pos < len(value):
+                item, pos = _read_varint(value, pos)
+                types.append(_THREAT_TYPE_NAMES.get(item, "THREAT_TYPE_UNSPECIFIED"))
+        elif number == 2 and wire == 0:  # unpacked enum value
+            types.append(_THREAT_TYPE_NAMES.get(value, "THREAT_TYPE_UNSPECIFIED"))
+    threat["threatTypes"] = types
+    return threat
+
+
+def _decode_search_response(data: bytes) -> dict[str, Any]:
+    """Turn a v5 urls:search Protobuf body into the JSON-shaped dict the lookup code validates."""
+    result: dict[str, Any] = {"threats": []}
+    for number, wire, value in _fields(data):
+        if number == 1 and wire == 2:
+            result["threats"].append(_decode_threat(value))
+        elif number == 2 and wire == 2:
+            seconds = nanos = 0
+            for inner, inner_wire, inner_value in _fields(value):
+                if inner == 1 and inner_wire == 0:
+                    seconds = inner_value
+                elif inner == 2 and inner_wire == 0:
+                    nanos = inner_value
+            if nanos > 999_999_999:
+                raise ValueError("invalid duration")
+            result["cacheDuration"] = f"{seconds}" + (f".{nanos:09d}".rstrip("0") if nanos else "") + "s"
+    return result
 
 
 def _is_threat_type(value: Any) -> bool:
