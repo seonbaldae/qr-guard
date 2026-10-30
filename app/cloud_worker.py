@@ -226,8 +226,8 @@ class CloudWorkerClient:
                                    resources=SandboxResources(vcpus=1, memory=2048), network_policy=policy) as box:
                     await box.fs.write_text(INPUT_PATH, json.dumps({"scanId": scan_id, "url": url, "timeoutMs": 20000}))
                     process = await box.run_process("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
-                                                    cwd="/app", kill_after=25, capture_output=True, check=True)
-                    if process.returncode != 0:
+                                                    cwd="/app", kill_after=25, capture_output=True, check=False)
+                    if process.returncode not in (0, 1):
                         raise CloudWorkerError("worker_unreachable")
                     data = await _read_bounded(box.fs, RESULT_PATH, MAX_RESULT_BYTES)
                     try:
@@ -248,7 +248,7 @@ class CloudWorkerClient:
                             result.screenshot_status = "failed"
                             result.error_code = "invalid_screenshot"
                     result.inspection_complete = bool(
-                        result.inspection_complete and result.status == "completed" and result.final_url
+                        process.returncode == 0 and result.inspection_complete and result.status == "completed" and result.final_url
                         and result.http_status is not None and png and result.dom_analysis
                         and result.network_analysis and result.network_analysis.blocked_request_count == 0
                         and result.redirect_analysis

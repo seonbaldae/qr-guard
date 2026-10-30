@@ -66,15 +66,16 @@ class FakeFS:
 
 
 class FakeBox:
-    def __init__(self, body=None, png=None, process_error=None):
+    def __init__(self, body=None, png=None, process_error=None, returncode=0):
         self.fs = FakeFS(body or result_body(), png if png is not None else png_bytes())
         self.calls, self.exited, self.process_error = [], False, process_error
+        self.returncode = returncode
 
     async def run_process(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
         if self.process_error:
             raise self.process_error
-        return SimpleNamespace(returncode=0, stdout="private remote output", stderr="private remote error")
+        return SimpleNamespace(returncode=self.returncode, stdout="private remote output", stderr="private remote error")
 
 
 class Factory:
@@ -124,7 +125,7 @@ def test_real_sdk_policy_and_process_contract_keep_credentials_out_of_vm():
     assert _serialize_network_policy(policy) == {"allow": {"*": []}, "subnets": {"deny": list(DENIED_SUBNETS)}}
     assert "::/0" in policy.subnets.deny and "168.63.129.16/32" in policy.subnets.deny
     assert box.calls == [("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
-                         {"cwd": "/app", "kill_after": 25, "capture_output": True, "check": True})]
+                         {"cwd": "/app", "kill_after": 25, "capture_output": True, "check": False})]
     assert box.fs.writes[0][0] == INPUT_PATH
     assert json.loads(box.fs.writes[0][1]) == {"scanId": "scan_123", "url": TARGET, "timeoutMs": 20000}
     assert box.fs.reads == [(RESULT_PATH, MAX_RESULT_BYTES + 1), (SCREENSHOT_PATH, MAX_PNG_BYTES + 1)]
@@ -196,6 +197,13 @@ def test_partial_observation_preserves_valid_screenshot_without_success(changes)
     (result, image), _, box = run(FakeBox(result_body(**changes)))
     assert result.status == "failed" and not result.inspection_complete and image == png_bytes()
     assert result.error_code is None and box.exited
+
+
+@pytest.mark.parametrize("status", ["failed", "completed"])
+def test_exit_one_partial_png_is_preserved_without_success(status):
+    (result, image), _, box = run(FakeBox(result_body(status=status), returncode=1))
+    assert result.status == "failed" and not result.inspection_complete
+    assert result.screenshot_status == "ready" and image == png_bytes() and box.exited
 
 
 def test_policy_block_preserves_screen_but_prevents_complete_inspection():

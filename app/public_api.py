@@ -1,11 +1,11 @@
-"""Stateless public API for the mobile deployment while Worker is maintained.
+"""One request owns its static lookup and optional disposable cloud visit.
 
-One request completes its own static lookup. No job, screenshot, or report state
-is kept in a serverless instance. The separate local Docker integration remains
-in app.main and is deliberately not imported here.
+No job, screenshot, or report state is retained in the serverless instance.
+The independently maintained development Docker client is not imported here.
 """
 
 import asyncio
+import base64
 from datetime import datetime, timezone
 import os
 from urllib.parse import urlsplit
@@ -18,8 +18,9 @@ from fastapi.responses import JSONResponse
 from pydantic import field_validator
 
 from app.config import configured_origin
+from app.cloud_worker import CloudBrowserResult, CloudWorkerClient, CloudWorkerError, _decode_png, _public_url
 from app.models import (
-    ProviderResult, SandboxResult, ScanReport, ScanRequest, ScreenshotState,
+    Evidence, ProviderResult, SandboxResult, ScanReport, ScanRequest, ScreenshotState, Signal,
     StaticAnalysisResult, VerdictResult,
 )
 from app.precheck.safebrowsing import check_safe_browsing
@@ -27,16 +28,151 @@ from app.static_adapter import ThreatCheck, analyze_static
 
 MAX_REQUEST_BYTES = 16 * 1024
 LOOKUP_TIMEOUT_SECONDS = 12
+ANALYSIS_TIMEOUT_SECONDS = 80
 SCOPE_NOTICE = "현재는 주소만 검사하며 사이트 화면은 확인하지 않았습니다."
 WORKER_NOTICE = "Docker 미리보기는 점검 중입니다."
 REPORT_NOTICE = "신고 접수는 준비 중입니다."
+CLOUD_LIMITATIONS = [
+    "초기 화면과 짧은 관찰 구간만 확인했으며 로그인·입력·폼 제출은 수행하지 않았습니다.",
+    "브랜드 사칭 판별 모델은 연결되지 않아 화면이 정상처럼 보여도 사칭 여부를 확정할 수 없습니다.",
+    "검사 결과는 안전을 보증하지 않습니다.",
+]
+_CLOUD_ERROR_CODES = {
+    "worker_timeout", "worker_unreachable", "worker_invalid_response", "invalid_screenshot",
+    "worker_not_configured", "unsafe_target", "worker_policy_blocked",
+}
 
 
-def capabilities():
+def capabilities(cloud_worker=None):
+    enabled = bool(cloud_worker is not None and cloud_worker.enabled)
     return {
-        "scanTransport": "direct", "scanMode": "static", "analysisScope": "static",
-        "previewAvailable": False, "reportAvailable": False,
+        "scanTransport": "direct", "scanMode": "sandbox" if enabled else "static",
+        "analysisScope": "sandbox" if enabled else "static",
+        "previewAvailable": enabled, "reportAvailable": False,
     }
+
+
+def configured_cloud_worker():
+    """An image name alone cannot turn on an unverified public browser."""
+    if os.getenv("QR_GUARD_CLOUD_WORKER_VERIFIED") != "true":
+        return CloudWorkerClient(None)
+    try:
+        return CloudWorkerClient(os.getenv("QR_GUARD_CLOUD_WORKER_IMAGE"))
+    except ValueError:
+        return CloudWorkerClient(None)
+
+
+async def _static_lookup(url, check, timeout=LOOKUP_TIMEOUT_SECONDS):
+    try:
+        async with asyncio.timeout(timeout):
+            return await asyncio.to_thread(analyze_static, url, check)
+    except Exception:
+        # Transport exceptions may include API keys and URL tokens.
+        return StaticAnalysisResult(status="failed", registered_domain=None, providers=[
+            ProviderResult(name="google_safe_browsing", status="failed", matched=None, checked_at=None),
+        ], limitations=["위협 정보 조회를 완료하지 못했습니다."]), []
+
+
+def _cloud_observations(result, scan_id):
+    """Project trusted schema fields into primitive facts, without raw VM logs."""
+    evidence, signals = [], []
+    observed_at = result.captured_at or datetime.now(timezone.utc)
+
+    def add(kind, summary, data, severity="info"):
+        item = Evidence(id=f"ev-cloud-{scan_id}-{kind}", kind=kind, source="cloud_browser",
+                        observed_at=observed_at, summary=summary, data=data)
+        evidence.append(item)
+        signals.append(Signal(id=f"sig-cloud-{scan_id}-{kind}", kind=kind, source="cloud_browser",
+                              severity=severity, summary=summary, evidence_ids=[item.id]))
+
+    if result.dom_analysis is not None:
+        dom = result.dom_analysis
+        add("dom_observation", f"비밀번호 입력 필드 {dom.password_field_count}개를 관찰했습니다.", {
+            "passwordFieldCount": dom.password_field_count, "formCount": len(dom.forms),
+            "sensitiveFieldTypeCount": len(dom.sensitive_field_types), "pageTitle": dom.page_title,
+        }, "medium" if dom.password_field_count else "info")
+    if result.network_analysis is not None:
+        network = result.network_analysis
+        add("network_observation", f"네트워크 요청 {network.request_count}건과 정책 차단 {network.blocked_request_count}건을 관찰했습니다.", {
+            "requestCount": network.request_count, "blockedRequestCount": network.blocked_request_count,
+            "hostCount": len(network.request_hosts),
+        }, "medium" if network.blocked_request_count else "info")
+    if result.redirect_analysis is not None:
+        redirect = result.redirect_analysis
+        add("redirect_observation", f"페이지 이동 {len(redirect.redirect_chain)}건을 관찰했습니다.", {
+            "redirected": redirect.redirected, "redirectCount": len(redirect.redirect_chain),
+        })
+    return evidence, signals
+
+
+async def _cloud_report(worker, scan_id, url, check, deadline):
+    png = None
+    try:
+        async with asyncio.timeout(max(0.001, deadline - asyncio.get_running_loop().time())):
+            result, png = await worker.analyze(scan_id, url)
+        # Revalidate injected adapters too; one request must own its exact result.
+        result = CloudBrowserResult.model_validate(result.model_dump(by_alias=True))
+        if result.scan_id != scan_id:
+            raise CloudWorkerError("worker_invalid_response")
+        if result.final_url:
+            _public_url(result.final_url)
+        if png is not None:
+            png = _decode_png(png)
+        if result.screenshot_status != "ready":
+            png = None
+        complete = bool(result.status == "completed" and result.inspection_complete and png)
+        evidence, signals = _cloud_observations(result, scan_id)
+        sandbox = SandboxResult(
+            status="completed" if complete else "failed", final_url=result.final_url,
+            http_status=result.http_status, signals=signals,
+            screenshot=ScreenshotState(status="ready" if png else "failed", available=bool(png),
+                                       captured_at=result.captured_at if png else None,
+                                       error_code=None if png else "invalid_screenshot"),
+            limitations=list(dict.fromkeys([*result.limitations, *CLOUD_LIMITATIONS])),
+            error_code=result.error_code if result.error_code in _CLOUD_ERROR_CODES else None,
+        )
+        verdict = VerdictResult(
+            level="unknown", reasons=[
+                "격리 환경에서 페이지를 관찰했지만 사칭 여부를 충분히 판별하지 못했습니다." if complete
+                else "격리 환경의 검사를 완료하지 못해 판단을 보류했습니다."
+            ], evidence_ids=[item.id for item in evidence], limitations=sandbox.limitations,
+        )
+        if result.final_url:
+            final_static, final_evidence = await _static_lookup(
+                result.final_url, check,
+                min(LOOKUP_TIMEOUT_SECONDS, max(0.001, deadline - asyncio.get_running_loop().time())),
+            )
+            final_provider = final_static.providers[0] if final_static.providers else None
+            final_id_map = {item.id: f"final-{item.id}" for item in final_evidence}
+            final_evidence = [item.model_copy(update={"id": final_id_map[item.id]}) for item in final_evidence]
+            evidence.extend(final_evidence)
+            sandbox.signals.extend(item.model_copy(update={
+                "id": f"final-{item.id}", "evidence_ids": [final_id_map[key] for key in item.evidence_ids if key in final_id_map],
+            }) for item in final_static.signals)
+            provider_evidence = Evidence(
+                id=f"ev-cloud-{scan_id}-final-provider", kind="final_url_threat_lookup", source="google_safe_browsing",
+                observed_at=datetime.now(timezone.utc), summary="실제로 확인한 도착 주소의 위협 목록 조회 결과입니다.",
+                data={"status": final_provider.status if final_provider else "failed",
+                      "matched": final_provider.matched if final_provider else None},
+            )
+            evidence.append(provider_evidence)
+            if final_provider is not None and final_provider.status == "checked" and final_provider.matched is True:
+                verdict = VerdictResult(level="malicious", reasons=["실제 도착 주소에서 Google Safe Browsing의 알려진 위협이 발견되었습니다."],
+                                        evidence_ids=[item.id for item in final_evidence if item.kind == "known_threat_match"],
+                                        limitations=sandbox.limitations)
+            elif final_provider is None or final_provider.status != "checked":
+                sandbox.limitations.append("실제 도착 주소의 위협 정보 조회를 완료하지 못했습니다.")
+                verdict.limitations = list(sandbox.limitations)
+        return sandbox, verdict, evidence, png
+    except Exception as error:
+        code = "worker_timeout" if isinstance(error, TimeoutError) else getattr(error, "code", "worker_unreachable")
+        code = code if code in _CLOUD_ERROR_CODES else "worker_unreachable"
+        blocked = isinstance(error, CloudWorkerError) and error.blocked
+        limitations = ["격리 브라우저 검사를 완료하지 못했습니다.", *CLOUD_LIMITATIONS]
+        return SandboxResult(status="blocked" if blocked else "failed", error_code=code, limitations=limitations,
+                             screenshot=ScreenshotState(status="failed", error_code=code)), VerdictResult(
+            level="unknown", reasons=["격리 환경의 검사를 완료하지 못해 판단을 보류했습니다."], limitations=limitations,
+        ), [], None
 
 
 class PublicScanRequest(ScanRequest):
@@ -135,7 +271,7 @@ class PublicBoundaryMiddleware:
 
 
 def create_public_app(*, threat_check: ThreatCheck | None = None,
-                      allowed_origins: tuple[str, ...] | None = None) -> FastAPI:
+                      allowed_origins: tuple[str, ...] | None = None, cloud_worker=None) -> FastAPI:
     check = threat_check or check_safe_browsing
     if allowed_origins is None:
         allowed_origins = tuple(value.strip() for value in
@@ -149,6 +285,9 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
                                    allow_credentials=False)
     application.add_middleware(PublicBoundaryMiddleware, allowed_origins=allowed_origins)
 
+    def current_worker():
+        return cloud_worker if cloud_worker is not None else configured_cloud_worker()
+
     @application.exception_handler(RequestValidationError)
     async def validation_error(_request, exc):
         # Default validation includes rejected input. Never echo URLs or credentials.
@@ -160,23 +299,19 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
 
     @application.get("/api/health")
     async def health():
-        return {"status": "ok", **capabilities()}
+        return {"status": "ok", **capabilities(current_worker())}
 
     @application.get("/api/capabilities")
     async def get_capabilities():
-        return capabilities()
+        return capabilities(current_worker())
 
     @application.post("/api/analyze")
     async def analyze(request: PublicScanRequest):
-        try:
-            async with asyncio.timeout(LOOKUP_TIMEOUT_SECONDS):
-                static, evidence = await asyncio.to_thread(analyze_static, request.url, check)
-        except Exception:
-            # Exceptions from transports may contain API keys or URL tokens.
-            static = StaticAnalysisResult(status="failed", registered_domain=None, providers=[
-                ProviderResult(name="google_safe_browsing", status="failed", matched=None, checked_at=None),
-            ], limitations=["위협 정보 조회를 완료하지 못했습니다."])
-            evidence = []
+        deadline = asyncio.get_running_loop().time() + ANALYSIS_TIMEOUT_SECONDS
+        scan_id = uuid4().hex
+        worker = current_worker()
+        cloud_enabled = bool(worker.enabled)
+        static, evidence = await _static_lookup(request.url, check, LOOKUP_TIMEOUT_SECONDS)
         provider = static.providers[0] if static.providers else None
         matched = provider is not None and provider.status == "checked" and provider.matched is True
         checked = provider is not None and provider.status == "checked" and provider.matched is False
@@ -196,17 +331,30 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
                 level="unknown", reasons=["필요한 위협 정보 또는 브랜드 사칭 여부를 확인하지 못했습니다."],
                 limitations=[SCOPE_NOTICE, WORKER_NOTICE, "조회 실패와 미확인은 안전을 뜻하지 않습니다."],
             )
+        sandbox = SandboxResult(status="not_requested", skip_reason="static_only",
+                                screenshot=ScreenshotState(status="not_requested"),
+                                limitations=[SCOPE_NOTICE, WORKER_NOTICE])
+        png = None
+        if cloud_enabled and matched:
+            sandbox = SandboxResult(status="skipped", skip_reason="known_malicious",
+                                    screenshot=ScreenshotState(status="skipped"),
+                                    limitations=["알려진 위협 주소이므로 격리 브라우저에서도 방문하지 않았습니다."])
+            verdict.limitations = list(sandbox.limitations)
+        elif cloud_enabled:
+            sandbox, verdict, cloud_evidence, png = await _cloud_report(worker, scan_id, request.url, check, deadline)
+            evidence.extend(cloud_evidence)
         report = ScanReport(
-            scan_id=uuid4().hex, status="completed", mode="static", requested_url=request.url,
+            scan_id=scan_id, status="completed", mode="sandbox" if cloud_enabled else "static", requested_url=request.url,
             static_analysis=static, evidence=evidence, verdict=verdict, updated_at=datetime.now(timezone.utc),
-            sandbox_analysis=SandboxResult(status="not_requested", skip_reason="static_only",
-                                           screenshot=ScreenshotState(status="not_requested"),
-                                           limitations=[SCOPE_NOTICE, WORKER_NOTICE]),
+            sandbox_analysis=sandbox,
         ).model_dump(mode="json", by_alias=True)
         # No shared report database exists in the public deployment. Missing
         # statistics are unknown, not a fabricated zero or a successful receipt.
         report.update(reportCount=None, isReported=None, reportedByUser=None,
-                      previewAvailable=False, reportAvailable=False, analysisScope="static")
+                      previewAvailable=bool(png), reportAvailable=False,
+                      analysisScope="sandbox" if cloud_enabled else "static")
+        if png is not None:
+            report["previewImage"] = {"scanId": scan_id, "mimeType": "image/png", "base64": base64.b64encode(png).decode("ascii")}
         return report
 
     @application.post("/api/scans/{scan_id}/reports")
