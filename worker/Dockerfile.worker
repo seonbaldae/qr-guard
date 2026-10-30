@@ -10,6 +10,7 @@ ENV NODE_PATH=/home/pwuser/worker-deps/node_modules
 COPY worker.cjs .
 COPY observer.cjs .
 COPY network-analyzer.cjs redirect-analyzer.cjs dom-analyzer.cjs ./
+COPY verdict.cjs .
 
 EXPOSE 4000
 
