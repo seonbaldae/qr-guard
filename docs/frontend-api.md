@@ -1,6 +1,32 @@
 # 프런트엔드 API 연결 안내
 
-프런트엔드는 빌드 없이 정적 서버에서 실행합니다. 기본 동작은 실제 API 모드입니다. **현재 저장소의 Python 정적 분석 코드가 아래 HTTP API를 제공한다는 의미는 아닙니다.** 아래는 프런트가 연결할 수 있도록 정리한 제안 계약입니다. 실제 백엔드 계약이 정해지면 `src/config.js`와 `src/services/response-adapter.js`에서 대응합니다.
+프런트엔드는 빌드 없이 정적 서버에서 실행합니다. 기본 동작은 실제 API 모드입니다. 기본 연결 방식은 Python 백엔드(`app/main.py`, API 계약 v0.2)의 `POST /api/scans` + `GET /api/scans/{id}` 폴링입니다. 어댑터(`src/services/response-adapter.js`)가 백엔드의 중첩 보고서를 아래 화면용 모델로 변환합니다. 신고 API는 백엔드에 아직 없습니다. 이 문서의 `/api/analyze`와 신고 경로는 제안 계약이며, 실제 백엔드 계약이 바뀌면 `src/config.js`와 어댑터에서 대응합니다.
+
+## 백엔드와 로컬 연결
+
+```sh
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1   # 터미널 1: 백엔드
+node scripts/dev-server.mjs                                              # 터미널 2: 프런트 + /api 전달
+```
+
+`http://127.0.0.1:8080/`을 엽니다. `scripts/dev-server.mjs`는 정적 파일을 서빙하고 `/api/*`를 백엔드(`QR_GUARD_API`, 기본 `http://127.0.0.1:8000`)로 전달하므로 브라우저에는 한 출처로 보여 CORS 설정이 필요 없습니다. Node.js 기본 기능만 사용하며 Vercel 정적 출력에는 포함되지 않습니다.
+
+백엔드 보고서 변환 규칙:
+
+| 백엔드 | 화면용 모델 |
+| --- | --- |
+| `status: queued` | `pending` (폴링 계속) |
+| `verdict.level`: `malicious` / `suspicious` / `no_known_threat` / `unknown` | `phishing` / `suspicious` / `clear` / `inconclusive`. `verdict: null`·알 수 없는 값은 `inconclusive` |
+| `mode: sandbox`에서 `sandboxAnalysis.status`가 `completed`가 아닌 `no_known_threat` | `inconclusive`로 낮춤 (격리 방문 없이는 정상으로 보지 않음) |
+| `sandboxAnalysis.finalUrl` | `finalUrl` |
+| `sandboxAnalysis.screenshot`이 `ready`이고 `available: true` | `previewUrl = /api/scans/{id}/screenshot` (아니면 `null`) |
+| `staticAnalysis.providers` | `providers` |
+| `staticAnalysis.signals` + `sandboxAnalysis.signals` | `signals` |
+| 세 단계의 `limitations` | 중복을 제거해 합침 |
+| `updatedAt` | `checkedAt` |
+| 신고 건수·이력 | 백엔드가 제공하지 않으므로 `null`(확인할 수 없음) |
+
+검사 요청은 `{ url, mode: "sandbox" }`를 보냅니다(`src/config.js`의 `scanMode`). 백엔드 기본값은 `static`입니다.
 
 ## 실행과 모드
 
@@ -17,7 +43,8 @@ python3 -m http.server 8080 --bind 127.0.0.1
 `src/config.js`의 `frontendConfig`가 유일한 엔드포인트 설정입니다.
 
 - `apiBaseUrl`: 기본 `''`로 프런트와 같은 출처입니다. 개발용 별도 백엔드가 필요하면 해당 HTTP(S) 출처를 명시합니다. 이 경우 백엔드의 CORS 설정이 필요합니다. 비밀값을 설정에 넣지 않습니다.
-- `scanTransport`: 기본 `'direct'`, 작업 생성·폴링 서버는 `'job'`으로 바꿉니다.
+- `scanTransport`: 기본 `'job'`(Python 백엔드의 작업 생성·폴링). 한 번에 응답하는 서버는 `'direct'`로 바꿉니다.
+- `scanMode`: 작업 생성 본문의 `mode`, 기본 `'sandbox'`입니다.
 - `analyzePath`: 직접 검사 요청의 기본 경로 `/api/analyze`입니다.
 - `createScanPath`, `scanPath`, `reportPath`: 작업 생성·조회·신고의 제안 경로입니다.
 - `requestTimeoutMs`: 전체 검사·신고 요청의 제한 시간, 기본 30초입니다. 작업 폴링도 전체 제한 시간을 공유합니다.

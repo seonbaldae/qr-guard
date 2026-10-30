@@ -39,10 +39,49 @@ export function previewUrl(raw, { demo = false } = {}) {
   }
 }
 
+const BACKEND_VERDICTS = new Map([
+  ['malicious', 'phishing'], ['suspicious', 'suspicious'],
+  ['no_known_threat', 'clear'], ['unknown', 'inconclusive'],
+]);
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const listOf = (value) => (Array.isArray(value) ? value : []);
+
+// The Python backend (API contract v0.2) nests its report under staticAnalysis, sandboxAnalysis and
+// verdict.level. Flatten it into the shape validated below. Flat responses pass through unchanged.
+function flattenBackendReport(raw) {
+  if (!isObject(raw.verdict) && !isObject(raw.staticAnalysis) && !isObject(raw.sandboxAnalysis)) return raw;
+  const staticPart = isObject(raw.staticAnalysis) ? raw.staticAnalysis : {};
+  const sandbox = isObject(raw.sandboxAnalysis) ? raw.sandboxAnalysis : {};
+  const screenshot = isObject(sandbox.screenshot) ? sandbox.screenshot : {};
+  const verdictPart = isObject(raw.verdict) ? raw.verdict : null;
+  const scanId = safeScanId(raw.scanId);
+  let verdict = verdictPart ? BACKEND_VERDICTS.get(verdictPart.level) : undefined;
+  // In sandbox mode "no known threat" is only trusted once the isolated visit actually completed.
+  if (verdict === 'clear' && raw.mode === 'sandbox' && sandbox.status !== 'completed') verdict = 'inconclusive';
+  return {
+    scanId: raw.scanId,
+    requestedUrl: raw.requestedUrl,
+    status: raw.status === 'queued' ? 'pending' : raw.status,
+    verdict,
+    finalUrl: sandbox.finalUrl,
+    screenshotUrl: scanId && screenshot.status === 'ready' && screenshot.available === true
+      ? `/api/scans/${scanId}/screenshot` : null,
+    signals: [...listOf(staticPart.signals), ...listOf(sandbox.signals)],
+    evidence: raw.evidence,
+    providers: staticPart.providers,
+    limitations: [...new Set([
+      ...listOf(staticPart.limitations), ...listOf(sandbox.limitations), ...listOf(verdictPart?.limitations),
+    ])],
+    checkedAt: raw.updatedAt,
+  };
+}
+
 export function normalizeScanResponse(raw, expectedUrl, { demo = false } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new ServiceError('검사 응답 형식이 올바르지 않습니다.', 'invalid_response');
   }
+  raw = flattenBackendReport(raw);
   const requestedUrl = validateUrl(expectedUrl);
   try {
     if (validateUrl(raw.requestedUrl) !== requestedUrl) throw new Error();

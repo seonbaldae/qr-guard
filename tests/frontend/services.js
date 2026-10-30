@@ -12,6 +12,25 @@ const response = (overrides = {}) => ({
   limitations: ['모의 응답입니다.'], ...overrides,
 });
 
+// Shape returned by the Python backend (API contract v0.2).
+const backendReport = (overrides = {}) => ({
+  scanId: 'test-123', status: 'completed', mode: 'sandbox', requestedUrl: TEST_URL,
+  staticAnalysis: {
+    status: 'completed', registeredDomain: 'example.test', signals: [],
+    providers: [{ name: 'google-safebrowsing', status: 'checked', matched: false, checkedAt: '2026-10-31T00:00:00Z' }],
+    limitations: ['정적 한계'],
+  },
+  sandboxAnalysis: {
+    status: 'completed', skipReason: null, finalUrl: TEST_URL, httpStatus: 200,
+    screenshot: { status: 'ready', available: true, capturedAt: '2026-10-31T00:00:02Z', expiresAt: null },
+    signals: [], limitations: [],
+  },
+  evidence: [],
+  verdict: { level: 'no_known_threat', reasons: [], evidenceIds: [], limitations: ['판정 한계'] },
+  updatedAt: '2026-10-31T00:00:02Z',
+  ...overrides,
+});
+
 function assert(value, message = '기대 동작과 다릅니다.') {
   if (!value) throw new Error(message);
 }
@@ -149,18 +168,78 @@ export async function runServiceTests() {
     assert(result.providers.length === 2 && result.providers.every((provider) => provider.status === 'failed' && provider.matched === null && provider.checkedAt === null));
     assert(result.checkedAt === null);
   });
-  await test('실제 검사 요청은 우리 API의 POST 본문으로만 전송한다', async () => {
-    let called = 0;
+  await test('실제 검사 요청은 우리 API의 POST 본문으로만 전송하고 작업 상태를 조회한다', async () => {
+    const calls = [];
     await withFetch(async (endpoint, options) => {
-      called += 1;
-      assert(new URL(endpoint).pathname === '/api/analyze');
-      assert(options.method === 'POST' && JSON.parse(options.body).url === TEST_URL);
+      calls.push(`${options.method} ${new URL(endpoint).pathname}`);
       assert(options.redirect === 'error' && !endpoint.includes('example.test'));
+      if (options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        assert(body.url === TEST_URL && body.mode === 'sandbox');
+        return new Response(JSON.stringify({ scanId: 'test-123', status: 'queued', mode: 'sandbox' }), { status: 202 });
+      }
       return new Response(JSON.stringify(response()), { status: 200 });
     }, async () => {
       const result = await analyzeUrl(TEST_URL);
-      assert(result.verdict === 'clear' && !result.demo && called === 1);
+      assert(result.verdict === 'clear' && !result.demo);
+      assert(calls.join() === 'POST /api/scans,GET /api/scans/test-123');
     });
+  });
+  await test('백엔드의 queued·running 상태를 기다렸다가 완료 보고서를 화면용 모델로 변환한다', async () => {
+    const reports = [
+      backendReport({ status: 'running', verdict: null, sandboxAnalysis: { ...backendReport().sandboxAnalysis, status: 'running' } }),
+      backendReport(),
+    ];
+    const stages = [];
+    await withFetch(async (_endpoint, options) => {
+      if (options.method === 'POST') return new Response(JSON.stringify({ scanId: 'test-123', status: 'queued', mode: 'sandbox' }), { status: 202 });
+      return new Response(JSON.stringify(reports.shift()), { status: 200 });
+    }, async () => {
+      const result = await analyzeUrl(TEST_URL, { onProgress: ({ stage }) => stages.push(stage) });
+      assert(result.status === 'completed' && result.verdict === 'clear' && reports.length === 0);
+      assert(stages.includes('preview'), '실제 백엔드 상태가 있을 때만 화면 확인 단계를 표시해야 합니다.');
+    });
+  });
+  await test('백엔드 판정 수준을 화면 판정으로 변환하고 알 수 없는 값은 확인 불가로 둔다', () => {
+    const level = (value) => normalizeScanResponse(backendReport({ verdict: { level: value, reasons: [], evidenceIds: [], limitations: [] } }), TEST_URL).verdict;
+    assert(level('no_known_threat') === 'clear' && level('malicious') === 'phishing');
+    assert(level('suspicious') === 'suspicious' && level('unknown') === 'inconclusive' && level('new-level') === 'inconclusive');
+    assert(normalizeScanResponse(backendReport({ verdict: null }), TEST_URL).verdict === 'inconclusive');
+  });
+  await test('진행 중인 백엔드 보고서는 완료·정상으로 보정하지 않는다', () => {
+    const queued = normalizeScanResponse(backendReport({ status: 'queued', verdict: null }), TEST_URL);
+    assert(queued.status === 'pending' && queued.verdict === 'inconclusive');
+    const running = normalizeScanResponse(backendReport({ status: 'running' }), TEST_URL);
+    assert(running.verdict === 'inconclusive');
+  });
+  await test('격리 방문이 끝나지 않은 sandbox 모드의 정상 판정은 확인 불가로 낮춘다', () => {
+    const blocked = backendReport({ sandboxAnalysis: { ...backendReport().sandboxAnalysis, status: 'blocked', finalUrl: null, screenshot: { status: 'not_requested', available: false } } });
+    const result = normalizeScanResponse(blocked, TEST_URL);
+    assert(result.verdict === 'inconclusive' && result.finalUrl === null && result.previewUrl === null);
+    const staticOnly = backendReport({ mode: 'static', sandboxAnalysis: { status: 'not_requested', screenshot: { status: 'not_requested', available: false } } });
+    assert(normalizeScanResponse(staticOnly, TEST_URL).verdict === 'clear');
+  });
+  await test('백엔드 보고서의 최종 주소·미리보기·제공자·근거·한계를 화면 모델로 옮긴다', () => {
+    const observedAt = '2026-10-31T00:00:00Z';
+    const result = normalizeScanResponse(backendReport({
+      staticAnalysis: { ...backendReport().staticAnalysis, signals: [{ id: 's1', kind: 'threat_feed_match', severity: 'high', summary: '정적 신호', source: 'google-safebrowsing', evidenceIds: ['ev-1'] }] },
+      sandboxAnalysis: { ...backendReport().sandboxAnalysis, signals: [{ id: 's2', kind: 'redirect', severity: 'info', summary: '격리 신호', source: 'browser', evidenceIds: [] }] },
+      evidence: [{ id: 'ev-1', kind: 'threat_feed_match', source: 'google-safebrowsing', observedAt, summary: '근거', data: { secret: 'private' } }],
+    }), TEST_URL);
+    assert(result.finalUrl === validateUrl(TEST_URL) && result.previewUrl.endsWith('/api/scans/test-123/screenshot'));
+    assert(result.providers[0].name === 'google-safebrowsing' && result.providers[0].matched === false);
+    assert(result.signals.length === 2 && result.evidence[0].id === result.signals[0].evidenceIds[0] && !('data' in result.evidence[0]));
+    assert(result.limitations.includes('정적 한계') && result.limitations.includes('판정 한계'));
+    assert(result.reportCount === null && result.reportedByUser === false && result.checkedAt === '2026-10-31T00:00:02Z');
+  });
+  await test('스크린샷이 준비되지 않았거나 이용할 수 없으면 미리보기 주소를 만들지 않는다', () => {
+    for (const screenshot of [{ status: 'pending', available: false }, { status: 'ready', available: false }, { status: 'failed', available: false }, {}]) {
+      const report = backendReport({ sandboxAnalysis: { ...backendReport().sandboxAnalysis, screenshot } });
+      assert(normalizeScanResponse(report, TEST_URL).previewUrl === null);
+    }
+  });
+  await test('백엔드 보고서도 요청 URL이 다르면 거부한다', async () => {
+    await rejects(() => normalizeScanResponse(backendReport({ requestedUrl: 'https://other.test/' }), TEST_URL), (error) => error.code === 'mismatched_response');
   });
   await test('API 오류를 데모 성공으로 대체하지 않는다', async () => {
     await withFetch(async () => new Response('', { status: 503 }), async () => {

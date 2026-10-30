@@ -23,12 +23,16 @@ export async function analyzeUrl(rawUrl, { signal, mode = 'live', scenario = 'cl
     if (frontendConfig.scanTransport === 'direct') {
       raw = await requestJson(frontendConfig.analyzePath, { body: { url }, method: 'POST', signal: scope.signal });
     } else if (frontendConfig.scanTransport === 'job') {
-      raw = await requestJson(frontendConfig.createScanPath, { body: { url }, method: 'POST', signal: scope.signal });
+      raw = await requestJson(frontendConfig.createScanPath, {
+        body: { url, mode: frontendConfig.scanMode }, method: 'POST', signal: scope.signal,
+      });
       const scanId = safeScanId(raw.scanId);
       if (!scanId) throw new ServiceError('검사 작업 식별자를 확인할 수 없습니다.', 'invalid_response');
-      while (['pending', 'running'].includes(raw.status)) {
+      while (['queued', 'pending', 'running'].includes(raw.status)) {
         // Only backend-reported execution stages change the explanatory message.
-        if (raw.stage === 'preview') onProgress?.({ stage: 'preview', message: '격리된 환경에서 사이트 화면을 확인하고 있어요' });
+        if (raw.stage === 'preview' || raw.sandboxAnalysis?.status === 'running') {
+          onProgress?.({ stage: 'preview', message: '격리된 환경에서 사이트 화면을 확인하고 있어요' });
+        }
         await waitFor(frontendConfig.pollIntervalMs, scope.signal);
         raw = await requestJson(frontendConfig.scanPath(scanId), { signal: scope.signal });
         if (raw.scanId !== scanId) throw new ServiceError('검사 작업 응답이 일치하지 않습니다.', 'mismatched_response');

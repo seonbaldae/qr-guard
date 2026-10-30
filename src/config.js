@@ -2,7 +2,8 @@
 // this static frontend does not create the backend routes.
 export const frontendConfig = Object.freeze({
   apiBaseUrl: '',
-  scanTransport: 'direct', // 'direct' or 'job'
+  scanTransport: 'job', // 'job' matches the Python backend (POST /api/scans + polling); 'direct' is a proposal
+  scanMode: 'sandbox', // QR scans ask the backend for the isolated preview; the backend default is 'static'
   analyzePath: '/api/analyze',
   createScanPath: '/api/scans',
   scanPath: (scanId) => `/api/scans/${encodeURIComponent(scanId)}`,
