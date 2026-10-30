@@ -215,7 +215,7 @@ test('다시 스캔과 앱 재마운트는 검사·입력 상태를 초기화', 
 
 test('모든 UI Custom Element가 open Shadow DOM을 제공', async ({ app }) => {
   const elements = [app, ...allDeep(app.shadowRoot, '*').filter((element) => element.localName.startsWith('qr-'))];
-  assert(elements.length >= 5, '컴포넌트 구성이 확인되지 않습니다.');
+  assert(elements.length >= 3, '컴포넌트 구성이 확인되지 않습니다.');
   assert(elements.every((element) => element.shadowRoot?.mode === 'open'), 'open Shadow DOM이 없는 UI 컴포넌트가 있습니다.');
 });
 

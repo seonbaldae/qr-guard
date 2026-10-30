@@ -1,14 +1,15 @@
 :root {
   color-scheme: light;
-  --qr-bg: #f7f9f7;
+  --qr-bg: #fff;
   --qr-surface: #fff;
-  --qr-ink: #202d28;
-  --qr-muted: #6d7972;
-  --qr-green: #174f3f;
-  --qr-accent: #dbefb9;
-  --qr-tint: #edf3ec;
-  --qr-border: #e3e8e1;
-  --qr-danger: #ae3f36;
+  --qr-ink: #191f28;
+  --qr-muted: #6b7684;
+  --qr-primary: #3182f6;
+  --qr-primary-hover: #1b64da;
+  --qr-accent: #e8f3ff;
+  --qr-tint: #f2f4f6;
+  --qr-border: #e5e8eb;
+  --qr-danger: #f04452;
   --qr-font: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
   font-family: var(--qr-font);
   color: var(--qr-ink);
@@ -21,4 +22,4 @@ body { margin: 0; min-width: 320px; }
 button, input, select { font: inherit; }
 qr-app { display: block; min-height: 100svh; }
 noscript { display: block; padding: 30px; }
-::selection { background: #dbefb9; color: #174f3f; }
+::selection { background: #dbe9ff; color: #1b64da; }
