@@ -1,5 +1,5 @@
 import { sharedStyles } from '../styles/shared-styles.js';
-import { validateUrl } from '../utils/url.js';
+import { normalizeInputUrl } from '../utils/url.js';
 
 export class QrScanPage extends HTMLElement {
   constructor() {
@@ -38,7 +38,7 @@ export class QrScanPage extends HTMLElement {
         <summary>주소 직접 입력</summary>
         <form novalidate>
           <label for="url-input">검사할 주소</label>
-          <input id="url-input" name="url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://" aria-describedby="url-error">
+          <input id="url-input" name="url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="example.com" aria-describedby="url-error">
           <p id="url-error" class="error" role="alert"></p>
           <button class="button primary" type="submit">검사하기</button>
         </form>
@@ -69,10 +69,14 @@ export class QrScanPage extends HTMLElement {
 
   submitUrl(raw, source) {
     try {
-      const url = validateUrl(raw);
+      const url = normalizeInputUrl(raw);
       this.shadowRoot.querySelector('qr-camera-scanner').stop();
       this.dispatchEvent(new CustomEvent('scan-request', { detail: { url, source }, bubbles: true, composed: true }));
     } catch (error) {
+      if (source === 'camera') {
+        this.shadowRoot.querySelector('qr-camera-scanner').setMessage(error.message, true);
+        return;
+      }
       this.shadowRoot.getElementById('url-error').textContent = error.message;
       this.shadowRoot.querySelector('.manual-entry').open = true;
       const input = this.shadowRoot.querySelector('input');
