@@ -1,35 +1,38 @@
 # QR Guard
 
-QR에 담긴 주소를 사용자 기기에서 바로 열지 않고 먼저 검사하는 해커톤 서비스입니다. 공개 배포용 주소 검사와 로컬 Docker 미리보기를 분리했습니다.
+QR에 담긴 주소를 사용자 기기에서 바로 열지 않고 먼저 검사하는 해커톤 서비스입니다. 기존 공개 주소 검사와 로컬 Docker 개발 경로를 유지하면서, 요청별 클라우드 VM에서 Worker 이미지를 실행하는 미리보기 구성을 검증하고 있습니다.
 
 ## 구현된 흐름
 
 - **모바일 프런트:** HTML·CSS·순수 JavaScript ES Modules, Web Components와 open Shadow DOM으로 QR 촬영 → 검사 중 → 결과의 세 화면을 제공합니다. QR 인식은 브라우저의 `BarcodeDetector`를 사용하며 직접 입력도 지원합니다. 프로토콜 없는 웹 주소에는 입력 단계에서만 `https://`를 보완합니다.
-- **공개 API 구성:** `app/public_api.py`가 한 요청 안에서 정적 검사를 완료합니다. Vercel의 `POST /api/analyze`와 같은 출처로 연결하며 Docker나 메모리 작업 폴링에 의존하지 않습니다. 미리보기와 신고는 준비 중으로 표시합니다.
-- **로컬 통합 API:** `app/main.py`는 기존 작업 생성·조회·PNG 조회·신고 접수를 처리합니다. 로컬 프런트는 작업 완료를 폴링합니다. 프런트 전체 검사 제한은 두 구성 모두 60초입니다.
+- **공개 API 구성:** `app/public_api.py`가 같은 출처의 `POST /api/analyze` 요청 안에서 정적 검사와 설정된 클라우드 관찰을 처리합니다. 클라우드 이미지와 검증 게이트가 준비되지 않은 경우 정적 검사 범위로 동작합니다. 서버리스 인스턴스의 메모리 작업 폴링이나 로컬 Docker 데몬에 의존하지 않습니다.
+- **클라우드 Worker 구성:** `worker/cloud/`의 Docker 이미지를 고정된 VCR digest로 지정하고, 검사마다 Vercel Sandbox 임시 VM에서 실행하는 코드를 추가했습니다. PNG·실제 최종 URL·DOM·네트워크 관찰을 같은 API 응답으로 회수합니다. 현재 이미지 빌드와 실브라우저·공개 API 통합 검증이 진행 중이며, 공개 연동 완료를 뜻하지 않습니다.
+- **로컬 통합 API:** `app/main.py`는 기존 작업 생성·조회·PNG 조회·신고 접수를 처리합니다. 로컬 프런트는 작업 완료를 폴링합니다. 프런트 전체 검사 제한은 90초입니다.
 - **정적 검사:** URL 구조와 Google Safe Browsing v5를 확인합니다. Google 조회 실패를 미탐지로 바꾸지 않으며 키는 서버에서만 사용합니다. 검사 시작 전 URL이 Google에 전송된다는 안내를 제공합니다.
-- **Docker Worker:** Playwright·Chromium이 별도 컨테이너에서 페이지를 방문하고 실제 PNG·최종 URL·DOM 및 네트워크 관찰을 반환합니다. 로컬 통합 실행은 `--network none`을 유지하고 호스트 API가 제한된 `docker exec` 전송으로 Worker 작업을 생성·조회합니다.
+- **로컬 Docker Worker:** Playwright·Chromium이 별도 컨테이너에서 페이지를 방문하고 실제 PNG·최종 URL·DOM 및 네트워크 관찰을 반환합니다. 로컬 통합 실행은 `--network none`을 유지하고 호스트 API가 제한된 `docker exec` 전송으로 Worker 작업을 생성·조회합니다. 이 기존 팀 개발 경로는 클라우드용 단일 실행 이미지와 분리합니다.
 - **로컬 신고:** 완료된 악성 판정에 대한 신고를 현재 로컬 서버 프로세스에서 접수합니다. 같은 검사 ID의 중복 요청은 한 번만 집계합니다. 공개 배포에는 공유 저장소가 없으므로 이 메모리 집계를 사용하지 않습니다.
 
 정상 완료 결과에만 사용자가 직접 누를 수 있는 **사이트 들어가기** 버튼을 제공합니다. 피싱·의심·확인 불가 결과에는 접속 동작을 제공하지 않습니다. 알려진 위협이 발견되면 Worker 방문을 생략합니다. 미탐지는 완전한 안전이나 공식 사이트 인증을 뜻하지 않습니다.
 
 ## 다른 휴대전화에서 사용할 공개 서비스
 
-[QR Guard 열기](https://qr-guard-five.vercel.app/). 2026-10-31에 프런트와 정적 검사 API의 Vercel Production 배포를 완료했습니다. 로그인 쿠키 없이 공개 `GET /api/health`와 `POST /api/analyze`의 실제 Google 조회를 확인했습니다. 현재 공개 서비스는 **주소 검사**를 제공하며 Docker 미리보기와 신고는 준비 중입니다.
+[QR Guard 열기](https://qr-guard-five.vercel.app/). 2026-10-31에 프런트와 정적 검사 API의 Vercel Production 배포를 완료했고, 로그인 쿠키 없이 공개 `GET /api/health`와 `POST /api/analyze`의 실제 Google 조회를 확인했습니다. 이 완료 이력은 **주소 검사 배포**에 대한 것입니다. 새 클라우드 미리보기는 이미지 빌드·실브라우저·공개 응답 연결을 검증 중이므로 아직 이 성공 이력에 포함하지 않습니다. 신고는 공유 저장소 미연결로 준비 중입니다.
 
 실제 공개 주소에서 `example.com`은 조회 완료·위협 미탐지, Google 공식 피싱 테스트 주소는 알려진 위협으로 반환됐습니다. 두 결과 모두 실제 방문을 수행하지 않아 최종 URL은 `null`, 미리보기·신고 제공 여부는 `false`, 신고 건수는 미확인입니다. 배포 및 공개 HTTP 검증의 상세 범위는 [공개 배포 검증](docs/public-deployment.md)에 기록합니다.
 
-| 구분 | 공개 Vercel 구성 | 로컬 Docker 통합 구성 |
-| --- | --- | --- |
-| 검사 요청 | `POST /api/analyze`, 요청 안에서 완료 | `POST /api/scans`, 상태 폴링 |
-| 검사 범위 | URL 구조·Google Safe Browsing | 정적 검사·격리 방문·DOM·네트워크 관찰 |
-| 실제 방문·이미지 | 방문하지 않음, 미리보기 점검 안내 | Worker가 확인한 경우에만 제공 |
-| 최종 URL | `null`, 최종 목적지 미확인 | 실제 방문으로 관찰한 주소 |
-| 신고 | 미제공, 건수 미확인·버튼 비활성화 | 단일 프로세스 메모리에 접수 |
+| 구분 | 기존 공개 정적 배포 | 클라우드 미리보기 구성 — 검증 중 | 로컬 Docker 통합 구성 |
+| --- | --- | --- | --- |
+| 검사 요청 | `POST /api/analyze`, 요청 안에서 완료 | 같은 `POST /api/analyze`에서 요청별 VM 실행·회수 | `POST /api/scans`, 상태 폴링 |
+| 검사 범위 | URL 구조·Google Safe Browsing | 정적 검사·격리 방문·DOM·네트워크 관찰 | 정적 검사·격리 방문·DOM·네트워크 관찰 |
+| 실제 방문·이미지 | 방문하지 않음 | 검증·활성화 후 실제 PNG를 회수한 경우만 제공 | Worker가 확인한 경우에만 제공 |
+| 최종 URL | `null`, 최종 목적지 미확인 | 실행 결과에서 확인한 실제 주소만 제공 | 실제 방문으로 관찰한 주소 |
+| 신고 | 미제공·건수 미확인 | 미제공·건수 미확인 유지 | 단일 프로세스 메모리에 접수 |
 
 공개 화면은 검사 전에 **“지금은 주소만 검사해요. 사이트 화면은 확인하지 않아요.”**를 안내합니다. Google 목록에 없는 주소도 화면·동작을 검사하지 않았으므로 최종 `unknown`으로 판단을 보류하며 사이트 진입을 제공하지 않습니다. 제공자의 목록 미일치 사실은 보존합니다. 알려진 위협은 위험 경고로 표시하고, 확인하지 않은 최종 목적지나 스크린샷을 만들지 않습니다. `reportAvailable: false`이면 신고 건수는 `null`로 유지하고 “신고 기능 준비 중”을 표시합니다. 이 정책은 목록에 없는 사칭 사이트를 탐지한 것과는 구분합니다.
 
-수정 중인 `worker/`와 로컬 Docker 실행 코드는 공개 API의 배포 소스에 포함하지 않습니다. 공개 API는 작업 ID를 서버리스 메모리에서 재조회하지 않아 인스턴스가 바뀌는 폴링 문제를 피합니다. Docker 미리보기와 신고를 공개 서비스에 추가하려면 별도 Worker의 격리·접근 제어와 공유 저장소를 검증한 뒤 계약과 배포 설정을 연결해야 합니다. 이 정적 검사 구성이 해당 기능까지 제공한다고 설명하지 마세요.
+로컬 Docker 실행 코드와 수정 중인 기존 Worker 작업 서버를 공개 API 함수에 그대로 넣지 않습니다. 클라우드용 이미지는 별도로 빌드하며 공개 API가 VM을 생성하고 결과를 회수한 뒤 정리합니다. PNG는 검사 ID·MIME·시그니처·용량을 확인하는 `previewImage`로 전달해 후속 이미지 조회용 메모리 저장소에 의존하지 않습니다. 클라우드 VM에서 사설망·메타데이터 차단과 IPv6 비활성화 확인을 마친 뒤 Chromium을 실행하며, 키·SDK 자격 증명은 VM에 넘기지 않습니다. 재배포 절차와 현재 검증 상태는 [클라우드 미리보기 구성](docs/cloud-preview.md)을 참고하세요.
+
+공개 클라우드 경로에는 Phishpedia가 아직 연결되지 않았습니다. 실제 화면 촬영과 폼·네트워크 관찰이 성공하더라도 브랜드 사칭 여부가 미확인인 결과는 `unknown`으로 보류합니다. 알려진 Google 위협은 위험 경고로 유지하며 방문을 생략할 수 있습니다. 이미지가 보인다는 이유로 정상 판정이나 시각 기반 피싱 탐지 완료라고 설명하지 않습니다.
 
 휴대전화에서는 HTTPS 주소로 접속해야 카메라 권한을 사용할 수 있습니다. HTTPS만으로 모든 브라우저의 QR 해독 지원이 생기지는 않습니다. `BarcodeDetector`의 QR 지원 여부를 확인하며 미지원 환경에는 주소 직접 입력을 제공합니다. 실제 하드웨어 카메라 촬영은 별도 검증 대상입니다.
 
@@ -110,32 +113,34 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 ## 정적 검사와 판정 한계
 
-Google Safe Browsing v5가 위협 정보를 제공합니다. OpenPhish·일반 브랜드 유사도 엔진은 연결하지 않았습니다. 공개 구성은 요청 URL을 조회하고, 로컬 격리 모드는 실제 방문 후 최종 URL도 조회하며 Google 위협 근거를 보존합니다. Google 조회 성공의 빈 결과는 해당 조회 범위 내 미탐지이며, 키 누락·권한 오류·쿼터·타임아웃·비정상 응답은 `failed/matched:null`입니다. 성공 응답만 Google의 `cacheDuration` 동안 제한된 메모리 캐시에 보관합니다.
+Google Safe Browsing v5가 위협 정보를 제공합니다. OpenPhish·일반 브랜드 유사도 엔진은 연결하지 않았습니다. 정적 구성은 요청 URL을 조회하고, 클라우드·로컬 격리 구성은 실제 방문으로 최종 URL을 확인한 경우 해당 주소도 조회하며 Google 위협 근거를 보존합니다. Google 조회 성공의 빈 결과는 해당 조회 범위 내 미탐지이며, 키 누락·권한 오류·쿼터·타임아웃·비정상 응답은 `failed/matched:null`입니다. 성공 응답만 Google의 `cacheDuration` 동안 제한된 메모리 캐시에 보관합니다.
 
 쿼리 등을 포함한 검사 URL이 Google에 전송됩니다. 카메라 영상·QR 이미지는 보내지 않습니다. Google 키는 API 서버만 사용하며 Docker Worker와 정적 배포 출력에 포함하지 않습니다. 실제 인증 토큰·계정 정보가 포함된 주소는 시연에 사용하지 마세요. 참고: [Google Safe Browsing v5 URL 검색](https://developers.google.com/safe-browsing/reference/rest/v5/urls/search).
 
-판정은 Google 위협 탐지 → 격리 브라우저 촬영 → Phishpedia 로고 식별과 기준 도메인 비교 → 선택한 브랜드와 관찰된 로그인 필드의 불일치 → 필요한 검사 완료 시 범위 내 미탐지 순서로 처리합니다. 식별한 브랜드의 기준 도메인과 실제 도착 도메인이 다르면 사칭 의심으로 차단합니다. 브랜드 미식별·분석 실패를 미탐지로 바꾸지 않습니다. DOM·네트워크 관찰은 실제 정보 유출을 검증한 것과 다릅니다. 로그인·결제·폼 자동 제출은 하지 않습니다.
+로컬 통합의 판정은 Google 위협 탐지 → 격리 브라우저 촬영 → Phishpedia 로고 식별과 기준 도메인 비교 → 선택한 브랜드와 관찰된 로그인 필드의 불일치 → 필요한 검사 완료 시 범위 내 미탐지 순서로 처리합니다. 식별한 브랜드의 기준 도메인과 실제 도착 도메인이 다르면 사칭 의심으로 차단합니다. 브랜드 미식별·분석 실패를 미탐지로 바꾸지 않습니다. 이 로컬 모델 파이프라인이 새 공개 클라우드 이미지에 포함된 것으로 설명하지 마세요. DOM·네트워크 관찰은 실제 정보 유출을 검증한 것과 다릅니다. 로그인·결제·폼 자동 제출은 하지 않습니다.
 
 Docker는 VM 수준의 격리를 보증하지 않습니다. 기본 로컬 실행의 무해한 방문과 네트워크 단절 확인을 임의의 악성 사이트에 대한 운영 안전성 검증으로 확대 해석하지 마세요. Worker 이미지는 호스트 파일·Docker 소켓·Google 키를 마운트하지 않습니다. 자세한 실행 제한은 [Worker 안내](worker/README.md)를 참고하세요.
 
-## Vercel 프런트·정적 검사 API 배포
+## Vercel 프런트·API와 클라우드 Worker 배포
 
-기존 정적 프런트 배포에서 같은 출처의 정적 검사 API를 함께 배포하는 구조로 변경했습니다. 프런트 파일은 CDN의 `dist/`, Python API는 `api/analyze.py`, `api/health.py`, `api/capabilities.py`의 세 네이티브 Functions로 배포합니다. 별도 rewrite나 로컬 loopback API 주소를 사용하지 않습니다. 각 진입점은 `app/public_api.py`의 앱을 사용하며 Docker·로컬 메모리 작업 저장소를 가져오지 않습니다.
+기존 정적 프런트 배포에서 같은 출처의 API를 함께 배포하는 구조로 변경했습니다. 프런트 파일은 CDN의 `dist/`, Python API는 `api/analyze.py`, `api/health.py`, `api/capabilities.py`의 세 네이티브 Functions로 배포합니다. 별도 rewrite나 로컬 loopback API 주소를 사용하지 않습니다. 각 진입점은 `app/public_api.py`의 앱을 사용하며 클라우드 활성화 시 `app/cloud_worker.py`가 고정 이미지로 요청별 VM을 생성합니다. 로컬 Docker CLI나 메모리 작업 저장소를 가져오지 않습니다.
 
-저장소의 `vercel.json`은 다음 정적 설정을 사용합니다.
+현재 저장소의 `vercel.json`은 클라우드 미리보기를 위한 다음 배포 구성을 사용합니다. 설정 파일의 존재와 실제 공개 배포 성공을 구분합니다.
 
 | 설정 | 값 |
 | --- | --- |
 | Framework Preset | Other (`framework: null`) |
 | Install Command | 없음 |
-| Build Command | `node scripts/prepare-vercel.mjs --public` |
+| Build Command | `node scripts/prepare-vercel.mjs --public --cloud-preview` |
 | Output Directory | `dist` |
 | Python Functions | `api/analyze.py`, `api/health.py`, `api/capabilities.py` |
-| API 제한 시간 | 함수 최대 30초, 위협 조회 최대 12초 |
+| API 제한 시간 | 함수 최대 120초, 프런트 전체 요청 최대 90초 |
 
-복사 스크립트는 `index.html`, `src/`의 JS·CSS, `assets/`의 허용된 이미지만 정적 출력에 담습니다. `--public`은 생성된 `dist/src/deployment-config.js`에 `direct/static` 설정을 기록하며 소스의 로컬 `job/sandbox` 기본값을 바꾸지 않습니다. Python 코드는 Vercel이 별도로 빌드합니다. `.vercelignore`는 공개 API가 가져오는 Python 소스와 실행 의존성만 추가로 허용하며 수정 중인 Worker·테스트·비밀 파일은 제외합니다. 프런트에 런타임 라이브러리나 번들러를 추가하지 않습니다.
+복사 스크립트는 `index.html`, `src/`의 JS·CSS, `assets/`의 허용된 이미지만 정적 출력에 담습니다. `--public --cloud-preview`는 생성된 `dist/src/deployment-config.js`에 `direct/sandbox` 설정을 기록하며, `--public`만 사용하면 이전 정적 `direct/static` 구성을 만듭니다. 소스의 로컬 `job/sandbox` 기본값은 바꾸지 않습니다. Python 코드는 Vercel이 별도로 빌드합니다. `.vercelignore`는 공개 API가 가져오는 Python 소스와 실행 의존성만 추가로 허용하며 Worker 이미지는 별도 빌드·배포합니다. 프런트에 런타임 라이브러리나 번들러를 추가하지 않습니다.
 
 Google 키는 Vercel 서버 환경 변수 `GOOGLE_SAFE_BROWSING_API_KEY`로만 설정합니다. Production·Preview의 민감한 값으로 관리하고 정적 파일·배포 소스·문서에 기록하지 않습니다. API 응답은 `no-store`이며 16KiB 요청 본문 제한과 브라우저 출처 검증을 적용합니다. 이 출처 검증은 사용자 인증이나 분산 요청 제한을 대신하지 않습니다.
+
+클라우드 Worker의 서버 설정은 `QR_GUARD_CLOUD_WORKER_IMAGE=<VCR의 @sha256 digest>`와 `QR_GUARD_CLOUD_WORKER_VERIFIED=true`입니다. 실제 VM 방화벽·IPv6 비활성화·Chromium 샌드박스·PNG 회수를 검증하기 전에는 검증 플래그를 켜지 않습니다. 빈 이미지 설정이나 미검증 상태에서는 정적 검사로 동작하고, 활성화 후 방문 실패는 `unknown`으로 보류합니다. 이 플래그를 켜는 작업이 격리 정책을 만들어 주지는 않습니다.
 
 공개 배포 구성을 로컬에서 재현하려면 두 터미널에서 실행합니다.
 
@@ -146,11 +151,11 @@ Google 키는 Vercel 서버 환경 변수 `GOOGLE_SAFE_BROWSING_API_KEY`로만 �
 
 ```sh
 # 터미널 2: 공개 프런트 설정으로 API를 같은 출처에 연결
-node scripts/prepare-vercel.mjs --public
+node scripts/prepare-vercel.mjs --public --cloud-preview
 PORT=8086 QR_GUARD_API=http://127.0.0.1:8001 node scripts/dev-server.mjs --public
 ```
 
-[공개 구성 로컬 확인](http://127.0.0.1:8086/)에서 `GET /api/health`와 실제 검사를 확인합니다. 이는 공개 배포의 로컬 재현이며 휴대전화 하드웨어 촬영 검증을 대신하지 않습니다.
+[공개 구성 로컬 확인](http://127.0.0.1:8086/)에서 `GET /api/health`와 실제 검사를 확인합니다. 클라우드 이미지 설정·검증 게이트·서버 SDK 인증이 준비되지 않았다면 실제 VM 방문까지 확인한 것은 아닙니다. 이 로컬 재현은 공개 배포나 휴대전화 하드웨어 촬영 검증을 대신하지 않습니다.
 
 ## URL별 고정 판정 시연
 
