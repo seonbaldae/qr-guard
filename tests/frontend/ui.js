@@ -449,6 +449,28 @@ test('지정 URL 데모의 로딩·결과 표시는 활성 상태를 따르고 �
   }
 });
 
+test('URL 데모에서 다른 주소는 모의 비피싱 문구를 표시하며 실제 접속은 비활성화한다', async ({ app, requests, opened, mock }) => {
+  const url = 'https://other.example.test/path?step=1#section';
+  const enabled = urlVerdictDemoResponse('https://fake-phishing-website.vercel.app/') !== null;
+  mock((request) => jsonResponse(scanResponse(request.body.url, { verdict: 'phishing', finalUrl: null })));
+  enterUrl(app, url);
+  const banner = app.shadowRoot.querySelector('.demo-banner');
+  assert(banner.hidden === !enabled, '다른 URL의 로딩 화면에 데모 상태가 반영되지 않았습니다.');
+  const page = await resultPage(app);
+  const title = page.shadowRoot.querySelector('qr-verdict-summary').shadowRoot.querySelector('h2').textContent;
+  const button = page.shadowRoot.querySelector('.main-action');
+  if (enabled) {
+    assert(title === '피싱 사이트가 아니에요 (모의 결과)', '다른 URL에 모의 비피싱 문구가 없습니다.');
+    assert(button.disabled && !page.shadowRoot.querySelector('.demo-open').hidden, '모의 비피싱 결과에서 실제 사이트 접속을 허용했습니다.');
+    assert(page.shadowRoot.getElementById('final').textContent.includes('미확인'), '모의 비피싱 결과에 실제 도착 주소를 만들었습니다.');
+    button.click();
+    page.dispatchEvent(new CustomEvent('open-site-request', { bubbles: true, composed: true }));
+  } else assert(title.includes('피싱 사이트로 판정'), '비활성 상태에서 API 판정을 덮어썼습니다.');
+  assert(banner.hidden === !enabled && requests.length === (enabled ? 0 : 1) && opened.length === 0);
+  page.shadowRoot.querySelector('.rescan').click();
+  assert(banner.hidden && find(app.shadowRoot, 'qr-scan-page'), '재스캔 후 데모 상태가 남았습니다.');
+});
+
 test('지정 URL 검사 취소는 데모 표시를 지우고 늦은 결과를 표시하지 않는다', async ({ app, requests, mock }) => {
   const url = 'https://fake-phishing-website.vercel.app/';
   const enabled = urlVerdictDemoResponse(url) !== null;

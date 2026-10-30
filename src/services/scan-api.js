@@ -24,7 +24,7 @@ export async function analyzeUrl(rawUrl, { signal, mode = 'live', source = 'qr',
     if (!['qr', 'manual'].includes(source)) throw new ServiceError('검사 요청의 입력 출처를 확인해 주세요.', 'configuration');
     if (urlDemo) {
       await waitFor(frontendConfig.demoDelayMs, scope.signal);
-      return normalizeScanResponse(urlDemo, url, { demo: true });
+      return { ...normalizeScanResponse(urlDemo, url, { demo: true }), urlVerdictDemo: true };
     }
     let raw;
     if (frontendConfig.scanTransport === 'direct') {

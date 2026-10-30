@@ -400,7 +400,7 @@ export async function runServiceTests() {
         const result = await analyzeUrl(input, { source: 'manual' });
         assert(result.demo === enabled && calls === (enabled ? 0 : 1), 'URL 데모의 활성 상태와 API 요청이 다릅니다.');
         if (!enabled) { assert(result.verdict === 'inconclusive'); return; }
-        assert(result.status === 'completed' && result.verdict === 'phishing');
+        assert(result.status === 'completed' && result.verdict === 'phishing' && result.urlVerdictDemo === true);
         assert(result.reasons.some((item) => item.includes(reason)), 'URL별 탐지 사유가 다릅니다.');
         assert(result.finalUrl === null && result.previewUrl === null && result.previewImage === null);
         assert(result.reportAvailable === false && result.reportCount === null && result.isReported === null);
@@ -409,8 +409,10 @@ export async function runServiceTests() {
       });
     }
   });
-  await test('지정 URL 데모는 다른 프로토콜·포트·경로·쿼리·유사 도메인에 적용되지 않는다', async () => {
+  await test('URL 데모를 켜면 두 지정 주소 이외의 유효한 URL은 모두 모의 비피싱 결과가 된다', async () => {
+    const enabled = urlVerdictDemoResponse('https://fake-phishing-website.vercel.app/') !== null;
     const urls = [
+      'https://example.com/',
       'http://realistic-phishing-website.vercel.app/',
       'https://fake-phishing-website.vercel.app:8443/',
       'https://realistic-phishing-website.vercel.app/survey',
@@ -425,11 +427,18 @@ export async function runServiceTests() {
       return new Response(JSON.stringify(response({ requestedUrl: JSON.parse(options.body).url, verdict: 'inconclusive' })));
     }, async () => {
       for (const url of urls) {
-        assert(urlVerdictDemoResponse(validateUrl(url)) === null, '지정하지 않은 URL에 데모를 적용했습니다.');
-        assert(!(await analyzeUrl(url)).demo, '지정하지 않은 URL이 실제 API를 우회했습니다.');
+        const fixture = urlVerdictDemoResponse(validateUrl(url));
+        assert(enabled ? fixture?.verdict === 'clear' : fixture === null, 'URL 데모의 기본 비피싱 분기가 다릅니다.');
+        const result = await analyzeUrl(url);
+        assert(result.demo === enabled, 'URL 데모의 활성 상태와 결과가 다릅니다.');
+        if (enabled) {
+          assert(result.verdict === 'clear' && result.urlVerdictDemo === true);
+          assert(result.reasons.some((reason) => reason.includes('피싱 사이트가 아니에요. (모의 결과)')));
+          assert(result.finalUrl === null && result.previewUrl === null && result.reportAvailable === false);
+        } else assert(result.verdict === 'inconclusive');
       }
     });
-    assert(calls === urls.length);
+    assert(calls === (enabled ? 0 : urls.length));
   });
   await test('지정 URL 검사는 데모 활성 여부와 관계없이 취소할 수 있다', async () => {
     const controller = new AbortController();

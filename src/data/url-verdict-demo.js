@@ -1,6 +1,6 @@
 // URL별 해커톤 시연 결과. 기본은 비활성화이며 URL·저장소·환경 변수로 켤 수 없습니다.
 let enabled = false;
-// enabled = true; // 이 한 줄의 주석만 해제하면 아래 두 URL의 고정 결과를 사용합니다.
+// enabled = true; // 주석 해제 시 아래 두 URL은 피싱, 나머지 URL은 비피싱 모의 결과를 표시합니다.
 
 const cases = new Map([
   ['https://realistic-phishing-website.vercel.app/', {
@@ -17,18 +17,23 @@ const cases = new Map([
   }],
 ]);
 
-// 입력은 validateUrl()로 정규화한 절대 주소입니다. 경로·쿼리·해시가 다르면 적용하지 않습니다.
+// 입력은 validateUrl()로 정규화한 절대 주소입니다. 두 주소와 정확히 일치할 때만 피싱으로 표시합니다.
 export function urlVerdictDemoResponse(requestedUrl) {
   if (!enabled) return null;
-  const scenario = cases.get(requestedUrl);
-  if (!scenario) return null;
+  const phishing = cases.has(requestedUrl);
+  const scenario = cases.get(requestedUrl) || {
+    id: 'demo-non-phishing-url',
+    kind: 'demo_non_phishing',
+    reason: '피싱 사이트가 아니에요. (모의 결과)',
+    summary: '지정한 두 피싱 시연 주소 외의 URL이므로 비피싱 모의 결과를 표시합니다. 실제 검사 결과는 아닙니다.',
+  };
   const source = '해커톤 시연용 고정 결과';
   return {
     scanId: scenario.id,
     requestedUrl,
     finalUrl: null,
     status: 'completed',
-    verdict: 'phishing',
+    verdict: phishing ? 'phishing' : 'clear',
     reasons: [scenario.reason],
     verdictEvidenceIds: [scenario.id],
     signals: [{ summary: scenario.summary, source, evidenceIds: [scenario.id] }],
@@ -43,7 +48,7 @@ export function urlVerdictDemoResponse(requestedUrl) {
     providers: [],
     checkedAt: null,
     limitations: [
-      '데모 응답 · 실제 검사 아님. 지정한 URL에 미리 준비한 피싱 판정과 사유를 표시합니다.',
+      '데모 응답 · 실제 검사 아님. 지정한 두 주소는 피싱, 나머지 주소는 비피싱으로 설정한 결과입니다.',
       '실제 로고 비교·동적 분석·위협 목록 조회를 수행하지 않았습니다.',
       '실제 목적지·스크린샷·신고 이력은 확인하지 않았으며 신고를 접수하지 않습니다.',
     ],
