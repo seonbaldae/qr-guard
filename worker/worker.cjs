@@ -5,10 +5,68 @@ const { createObserver } = require("./observer.cjs");
 const { createNetworkAnalyzer } = require("./network-analyzer.cjs");
 const { createRedirectAnalyzer } = require("./redirect-analyzer.cjs");
 const { createDomAnalyzer } = require("./dom-analyzer.cjs");
+const {
+  UnsafeDestinationError,
+  assertPublicHttpUrl,
+} = require("./destination-policy.cjs");
 
 const jobs = new Map();
-const TEST_URL = "http://127.0.0.1:4000/demo/normal";
+const DEMO_ORIGIN = "http://127.0.0.1:4000";
+const DEMO_PATHS = new Set([
+  "/demo/normal",
+  "/demo/suspicious",
+  "/demo/redirect",
+]);
 let busy = false;
+
+function isAllowedDemoUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.origin === DEMO_ORIGIN &&
+      DEMO_PATHS.has(url.pathname) &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password;
+  } catch {
+    return false;
+  }
+}
+
+async function validateTarget(value) {
+  if (isAllowedDemoUrl(value)) return new URL(value).href;
+  return assertPublicHttpUrl(value);
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function recordBlockedDestination(job, value, message) {
+  const id = `${job.scanId}-blocked-${job.evidence.length + 1}`;
+  job.blockedDestination = true;
+  job.evidence.push({
+    id,
+    kind: "blocked_destination",
+    source: "browser-policy",
+    observedAt: new Date().toISOString(),
+    summary: "공개 인터넷이 아닌 요청을 차단했습니다.",
+    data: { url: safeUrl(value), reason: message },
+  });
+  job.signals.push({
+    id: `${id}-signal`,
+    kind: "blocked_destination",
+    severity: "high",
+    summary: "페이지가 허용되지 않은 네트워크 주소로 접속하려 했습니다.",
+    source: "browser-policy",
+    evidenceIds: [id],
+  });
+}
 
 function json(res, status, data) {
   res.writeHead(status, {
@@ -65,16 +123,21 @@ async function runJob(job) {
       serviceWorkers: "block",
     });
 
-    // 개발용 테스트 주소 하나만 허용합니다.
-    // 이 제한 자체가 완전한 네트워크 격리는 아닙니다.
     await context.route("**/*", async route => {
-      if (route.request().url() === TEST_URL) {
-        return route.continue();
+      const requestedUrl = route.request().url();
+      try {
+        await validateTarget(requestedUrl);
+        return await route.continue();
+      } catch (error) {
+        if (error instanceof UnsafeDestinationError) {
+          recordBlockedDestination(job, requestedUrl, error.message);
+          await route.abort("blockedbyclient");
+          network?.markPolicyBlocked(route.request());
+          redirect?.markPolicyBlocked(route.request());
+          return;
+        }
+        throw error;
       }
-      // 실제 정책 abort 성공만 차단 근거로 전달합니다.
-      await route.abort();
-      network?.markPolicyBlocked(route.request());
-      redirect?.markPolicyBlocked(route.request());
     });
 
     const page = await context.newPage();
@@ -127,7 +190,7 @@ async function runJob(job) {
       kind: "navigation",
       source: "browser",
       observedAt: new Date().toISOString(),
-      summary: "허가된 테스트 페이지 방문을 완료했습니다.",
+      summary: "격리된 브라우저에서 페이지 방문을 완료했습니다.",
       data: { httpStatus: job.httpStatus },
     });
 
@@ -135,7 +198,11 @@ async function runJob(job) {
   } catch (e) {
     job.status = "failed";
     if (job.screenshotStatus !== "ready") job.screenshotStatus = "failed";
-    job.errorCode = expired ? "worker_timeout" : "browser_error";
+    job.errorCode = expired
+      ? "worker_timeout"
+      : job.blockedDestination
+        ? "unsafe_destination"
+        : "browser_error";
     job.limitations.push("브라우저 검사 또는 캡처를 완료하지 못했습니다.");
     console.error(job.scanId, job.errorCode);
   } finally {
@@ -224,6 +291,43 @@ const server = http.createServer(async (req, res) => {
         </html>`);
     }
 
+    // 로그인 화면을 흉내 낸 동적 분석 확인용 페이지입니다.
+    // 실제 브랜드 이미지나 외부 리소스는 사용하지 않습니다.
+    if (req.method === "GET" &&
+        url.pathname === "/demo/suspicious") {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      return res.end(`<!doctype html>
+        <html lang="ko">
+        <meta charset="utf-8">
+        <title>계정 확인 테스트</title>
+        <style>
+          body { max-width: 420px; margin: 48px auto; font-family: sans-serif; }
+          form { display: grid; gap: 12px; padding: 24px; border: 1px solid #ddd; }
+          input, button { padding: 12px; font: inherit; }
+        </style>
+        <h1>계정 확인 테스트</h1>
+        <p>동적 분석기의 폼·비밀번호 필드 탐지를 확인하는 무해한 페이지입니다.</p>
+        <form action="/demo/suspicious" method="post">
+          <label>이메일 <input type="email" name="email"></label>
+          <label>비밀번호 <input type="password" name="password"></label>
+          <button type="button">확인</button>
+        </form>
+        </html>`);
+    }
+
+    if (req.method === "GET" &&
+        url.pathname === "/demo/redirect") {
+      res.writeHead(302, {
+        Location: `${DEMO_ORIGIN}/demo/suspicious`,
+        "Cache-Control": "no-store",
+      });
+      return res.end();
+    }
+
     if (req.method === "POST" &&
         url.pathname === "/internal/jobs") {
       const input = await readBody(req);
@@ -235,9 +339,14 @@ const server = http.createServer(async (req, res) => {
         return error(res, 400, "invalid_scan_id", "scanId 형식 오류");
       }
 
-      if (target !== TEST_URL) {
-        return error(res, 422, "target_not_allowed",
-          "현재는 지정된 테스트 주소만 방문할 수 있습니다.");
+      let normalizedTarget;
+      try {
+        normalizedTarget = await validateTarget(target);
+      } catch (validationError) {
+        if (validationError instanceof UnsafeDestinationError) {
+          return error(res, 422, "unsafe_target", validationError.message);
+        }
+        throw validationError;
       }
 
       if (!Number.isInteger(timeoutMs) ||
@@ -249,7 +358,7 @@ const server = http.createServer(async (req, res) => {
       const existing = jobs.get(scanId);
 
       if (existing) {
-        if (existing.url !== target ||
+        if (existing.url !== normalizedTarget ||
             existing.timeoutMs !== timeoutMs) {
           return error(res, 409, "job_conflict",
             "같은 scanId에 다른 요청을 사용할 수 없습니다.");
@@ -269,7 +378,7 @@ const server = http.createServer(async (req, res) => {
 
       const job = {
         scanId,
-        url: target,
+        url: normalizedTarget,
         timeoutMs,
         status: "queued",
         acceptedAt: new Date().toISOString(),
@@ -284,9 +393,10 @@ const server = http.createServer(async (req, res) => {
         signals: [],
         evidence: [],
         limitations: [
-          "개발용 테스트 페이지 방문·캡처만 수행합니다.",
-          "악성 여부 판정과 고급 동적 분석은 수행하지 않았습니다.",
+          "DNS 검사와 브라우저 요청 차단을 적용했지만 별도 egress 프록시는 사용하지 않았습니다.",
+          "초기 페이지 로딩 범위에서 동적 분석을 수행합니다.",
         ],
+        blockedDestination: false,
         errorCode: null,
       };
 
@@ -343,7 +453,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(image);
       }
 
-      const { url: target, timeoutMs, ...result } = job;
+      const { url: target, timeoutMs, blockedDestination, ...result } = job;
       return json(res, 200, result);
     }
 

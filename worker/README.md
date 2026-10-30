@@ -21,6 +21,34 @@
 
 컨테이너 실행에는 별도의 네트워크 및 보안 설정이 필요합니다.
 
+## 로컬 데모 URL 검사
+
+Worker가 실행 중일 때 저장소의 `worker` 디렉터리에서 실행합니다.
+
+    docker build -f Dockerfile.worker -t seonbaldae-worker:test .
+    docker run --rm -d --name seonbaldae-worker-test \
+      -p 127.0.0.1:4001:4000 \
+      --security-opt seccomp=seccomp_profile.json \
+      --pids-limit 256 --memory 1g --shm-size 256m \
+      seonbaldae-worker:test
+
+    WORKER_BASE=http://127.0.0.1:4001 node scan.cjs http://127.0.0.1:4000/demo/normal
+    WORKER_BASE=http://127.0.0.1:4001 node scan.cjs http://127.0.0.1:4000/demo/suspicious
+    WORKER_BASE=http://127.0.0.1:4001 node scan.cjs http://127.0.0.1:4000/demo/redirect
+
+원하는 공개 URL도 같은 방식으로 마지막 인자에 넣습니다.
+
+    WORKER_BASE=http://127.0.0.1:4001 node scan.cjs https://example.com/
+
+`suspicious`는 폼과 비밀번호 필드 탐지 확인용이며 실제 피싱 페이지가 아닙니다.
+`redirect`는 `suspicious`로 이동해 최종 URL과 리디렉션 관찰을 확인합니다.
+`WORKER_BASE`는 호스트에서 접근하는 Worker API 주소입니다. 검사 URL의 4000 포트는
+컨테이너 내부에서 브라우저가 방문하는 주소이므로 그대로 둡니다.
+
+공개 URL은 최초 요청과 리디렉션·하위 리소스마다 DNS 결과를 확인합니다. localhost,
+사설망, link-local, 메타데이터 주소, 비표준 포트, 인증정보가 포함된 URL은 차단합니다.
+운영 환경에서는 DNS 검사 외에도 egress 프록시나 방화벽으로 같은 정책을 강제해야 합니다.
+
 ## Phishpedia
 외부 소스, 모델 가중치, 브랜드 자료와 캐시는 Git에 포함하지 않습니다.
 Dockerfile.phishpedia 빌드 전 third_party/Phishpedia 소스를 준비해야 합니다.
