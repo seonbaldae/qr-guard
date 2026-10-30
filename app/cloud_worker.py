@@ -15,6 +15,7 @@ import socket
 import unicodedata
 import warnings
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -26,6 +27,7 @@ from pydantic.alias_generators import to_camel
 MAX_RESULT_BYTES = 256 * 1024
 MAX_PNG_BYTES = 1536 * 1024
 MAX_PIXELS = 16_000_000
+CLEANUP_OPERATION_TIMEOUT_SECONDS = 5
 INPUT_PATH = "/tmp/qr-input.json"
 RESULT_PATH = "/tmp/qr-result.json"
 SCREENSHOT_PATH = "/tmp/qr-shot.png"
@@ -212,6 +214,72 @@ async def _disable_ipv6(box: Any) -> None:
         raise CloudWorkerError("worker_policy_blocked", blocked=True) from None
 
 
+def _discard_cleanup_exception(task: asyncio.Task) -> None:
+    # A timed-out SDK operation is cancelled and may finish asynchronously.
+    # Consume its exception without ever printing URLs or authentication data.
+    if not task.cancelled():
+        task.exception()
+
+
+async def _cleanup_sandbox(box: Any) -> None:
+    failed = False
+    # Bound the operations separately so a stalled stop never prevents a destroy
+    # attempt. These are the same public SDK calls used by its context manager.
+    for operation in (box.stop, lambda: box.destroy(delete_orphan_snapshots=True)):
+        task = None
+        try:
+            task = asyncio.create_task(operation())
+            done, _ = await asyncio.wait({task}, timeout=CLEANUP_OPERATION_TIMEOUT_SECONDS)
+            if not done:
+                failed = True
+                task.cancel()
+                task.add_done_callback(_discard_cleanup_exception)
+                continue
+            task.result()
+        except (Exception, asyncio.CancelledError):
+            failed = True
+    if failed:
+        raise CloudWorkerError("worker_unreachable")
+
+
+async def _finish_cleanup(box: Any) -> None:
+    # Shield only the independently bounded cleanup, never browser execution.
+    cleanup = asyncio.create_task(_cleanup_sandbox(box))
+    cancellation = None
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError as error:
+            cancellation = error
+        except Exception:
+            break
+    if cancellation is not None:
+        # Retrieve any safe cleanup error before preserving caller cancellation.
+        if not cleanup.cancelled():
+            cleanup.exception()
+        raise cancellation
+    cleanup.result()
+
+
+@asynccontextmanager
+async def _managed_sandbox(operation):
+    # Awaiting create_sandbox is a supported SDK API for explicit ownership.
+    box = await operation
+    body_error = None
+    try:
+        yield box
+    except BaseException as error:
+        body_error = error
+        raise
+    finally:
+        try:
+            await _finish_cleanup(box)
+        except Exception:
+            if isinstance(body_error, asyncio.CancelledError):
+                raise body_error
+            raise
+
+
 class CloudWorkerClient:
     def __init__(self, image: str | None, *, factory: Callable[..., Any] | None = None,
                  resolver: Callable[[str, int], Awaitable[list[str]]] | None = None):
@@ -253,8 +321,8 @@ class CloudWorkerClient:
             factory = self._factory or sandbox.create_sandbox
             policy = NetworkPolicy.custom(allow={"*": ()}, subnets=NetworkPolicySubnets(deny=DENIED_SUBNETS))
             async with asyncio.timeout(65):
-                async with factory(image=self.image, persistent=False, execution_time_limit=45,
-                                   resources=SandboxResources(vcpus=1, memory=2048), network_policy=policy) as box:
+                async with _managed_sandbox(factory(image=self.image, persistent=False, execution_time_limit=45,
+                                                   resources=SandboxResources(vcpus=1, memory=2048), network_policy=policy)) as box:
                     await _disable_ipv6(box)
                     await box.fs.write_text(INPUT_PATH, json.dumps({"scanId": scan_id, "url": url, "timeoutMs": 20000}))
                     process = await box.run_process("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],

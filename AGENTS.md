@@ -10,8 +10,9 @@
 - 기존 `app/`, `worker/`, 테스트·의존성과 설정을 보존한다. 프런트의 라이브러리 금지 조건은 기존 Python 서버·Playwright Worker 의존성과 구분한다.
 - 다른 저장소의 모의 피싱 페이지는 별도 프로젝트다. 이 서비스 화면에 사칭 로그인·개인정보 입력 화면을 만들지 않는다.
 - 별도 요청 없이 배포하거나 외부에 링크·QR을 배포하지 않는다.
-- Vercel 배포는 `dist/` 정적 프런트와 별도로 빌드한 공개 Python Functions를 같은 출처로 제공한다. `scripts/prepare-vercel.mjs --public`은 Node.js 기본 기능으로 허용된 파일을 복사하고 생성된 `dist/src/deployment-config.js`만 `direct/static`으로 설정한다. 소스의 로컬 `job/sandbox` 기본값을 바꾸지 않는다. 컴파일·번들링은 하지 않으며 백엔드·테스트·비밀 설정을 정적 출력에 포함하지 않는다.
-- 수정 중인 Docker Worker와 공개 배포용 API를 분리한다. 공개 API는 `app/public_api.py`의 요청 내 정적 검사만 사용하고 `api/analyze.py`, `api/health.py`, `api/capabilities.py`에서 제공한다. 작업 폴링·Docker·로컬 메모리 신고를 공개 서버리스 인스턴스에 그대로 올리지 않는다. Worker 변경은 별도로 요청받은 범위에서만 수행한다.
+- Vercel 배포는 `dist/` 정적 프런트와 별도로 빌드한 공개 Python Functions를 같은 출처로 제공한다. `scripts/prepare-vercel.mjs --public --cloud-preview`는 Node.js 기본 기능으로 허용된 파일을 복사하고 생성된 `dist/src/deployment-config.js`만 `direct/sandbox`로 설정한다. `--public`만 사용하면 `direct/static` 구성이다. 소스의 로컬 `job/sandbox` 기본값을 바꾸지 않는다. 컴파일·번들링은 하지 않으며 백엔드·테스트·비밀 설정을 정적 출력에 포함하지 않는다.
+- 공개 API는 `app/public_api.py`에서 요청별 정적 검사와 선택적인 클라우드 방문을 처리하고 `api/analyze.py`, `api/health.py`, `api/capabilities.py`에서 제공한다. 클라우드 방문은 `worker/cloud/`의 독립적인 Docker 이미지를 VCR에 고정 digest로 저장한 뒤 Vercel Sandbox의 요청별 임시 VM에서 실행하는 구조다. 로컬 Mac의 Docker 데몬이나 개발 Worker를 인터넷에 노출하는 구조로 설명하지 않는다.
+- 기존 `worker.cjs` 작업 서버·`scan.cjs`·로컬 Phishpedia 파이프라인은 별도 개발 경로로 보존한다. 공개 서버리스 함수에 로컬 Docker CLI·메모리 작업 폴링·메모리 신고를 그대로 올리지 않는다. 클라우드 이미지·실브라우저·공개 API 연결 검증은 현재 진행 중이며, 이 지침을 배포 성공의 근거로 사용하지 않는다.
 
 ## 필수 기술 제약
 
@@ -57,6 +58,7 @@
 - QR URL과 최종 URL은 구분한다. 백엔드가 실제 방문으로 확인한 `finalUrl`이 없으면 “최종 목적지 미확인”으로 표시한다.
 - `analysisScope: static`인 공개 결과는 주소 검사로 표시하며 화면·최종 목적지를 확인하지 않았음을 결과 앞부분에서 안내한다. 주소 검사만 수행한 응답에서 방문 주소나 스크린샷을 만들지 않는다. 공개 화면의 미리보기 점검 상태를 실제 촬영 실패·안전 판정으로 설명하지 않는다.
 - 공개 정적 API에서 Google 목록 미일치(`checked`, `matched: false`)는 관찰 사실로만 보존하고 최종 판정을 `unknown`으로 보류한다. 화면·동작 검사가 연결되기 전에는 이 결과를 `clear`나 정상 접속 허용으로 처리하지 않는다. 알려진 위협의 `malicious` 판정은 유지한다. 이를 신규 사칭 탐지 기능의 완성으로 설명하지 않는다.
+- 클라우드 방문이 실행된 응답은 실제 `mode`, `analysisScope`, `sandboxAnalysis` 상태에 따른다. 방문·촬영 성공 자체를 정상 판정으로 해석하지 않는다. 공개 클라우드 경로에 Phishpedia가 연결되지 않았다면 브랜드 사칭 여부는 미확인으로 남기고 최종 `unknown`을 유지한다. 알려진 위협은 방문을 생략할 수 있으며, 실제 도착 URL에서 위협을 발견한 경우에도 완료된 촬영 사실과 위험 판정을 구분한다.
 
 | 백엔드 결과 | 화면과 하단 동작 |
 | --- | --- |
@@ -87,8 +89,9 @@
 - 구현 전에 `app/main.py`, `app/models.py`, 실제 OpenAPI·테스트를 확인한다. `app/precheck/`는 정적 분석 내부 코드이므로 내부 반환 타입을 공개 보고서와 혼동하지 않는다.
 - 통신은 `src/services/`의 API 클라이언트에 모은다. 화면 컴포넌트 안에서 엔드포인트를 흩어 쓰거나 판정 엔진을 다시 구현하지 않는다.
 - 우리 백엔드에 필요한 검사·상태 조회·스크린샷 조회·신고 요청만 허용한다. 기본은 같은 출처의 상대 경로이며, 개발용 다른 출처는 명시된 설정으로 관리한다. API 키·비밀값을 프런트에 넣지 않는다.
-- 공개 배포 계약은 `POST /api/analyze`가 요청 안에서 실제 정적 검사를 완료하고 중첩 보고서를 반환하는 방식이다. `GET /api/health`, `GET /api/capabilities`가 제공 범위를 알린다. 응답은 `mode: static`, `analysisScope: static`, 미리보기·신고 미제공을 정확히 표시한다. 공개 API는 인스턴스 메모리에서 검사 ID를 재조회하지 않는다.
-- 로컬 통합 계약은 `POST /api/scans` → `GET /api/scans/{id}` 폴링, PNG 조회, `POST /api/scans/{id}/reports`다. QR·수동 입력 출처와 `mode: sandbox`를 전달하고 1.2초 폴링한다. 두 구성 모두 프런트 전체 60초 제한·취소를 적용하며 API 실패를 다른 구성의 성공으로 자동 대체하지 않는다.
+- 공개 배포 계약은 `POST /api/analyze`가 요청 안에서 정적 검사와 활성화된 클라우드 관찰을 완료하고 중첩 보고서를 반환하는 방식이다. `GET /api/health`, `GET /api/capabilities`가 설정된 제공 범위를 알린다. 클라우드 미설정·미검증 상태는 정적 검사 범위를 표시하고 임의로 방문 성공으로 보정하지 않는다. 공개 API는 인스턴스 메모리에서 검사 ID를 재조회하지 않는다.
+- 클라우드 PNG는 동일 API 응답의 `previewImage: {scanId, mimeType, base64}`로 전달한다. `scanId` 일치·PNG 형식·용량을 검사한 안전한 이미지 bytes만 Blob으로 표시하며 서버리스 메모리의 후속 이미지 조회에 의존하지 않는다. 데이터 누락·손상·다른 검사 ID는 미리보기 없음으로 처리한다.
+- 로컬 통합 계약은 `POST /api/scans` → `GET /api/scans/{id}` 폴링, PNG 조회, `POST /api/scans/{id}/reports`다. QR·수동 입력 출처와 `mode: sandbox`를 전달하고 1.2초 폴링한다. 프런트 전체 검사 제한은 90초, 공개 Vercel 함수 상한은 120초로 유지한다. 클라이언트 취소와 VM/서버 취소를 구분하고, API 실패를 다른 구성의 성공으로 자동 대체하지 않는다.
 - 외부 응답은 어댑터에서 검사해 일관된 화면용 모델로 변환한다. 다음은 **필요한 정보의 의미**이며 서버의 필드 이름·엔드포인트를 강제하는 확정 계약이 아니다.
 
 | 정보 | 프런트 처리 기준 |
@@ -143,6 +146,7 @@ src/
 assets/                     # 로컬 이미지·SVG
 app/                        # 실제 FastAPI·정적 검사·Worker 어댑터·로컬 신고
 worker/                     # Docker·Playwright Worker 및 분석 모듈
+  cloud/                    # 클라우드 요청별 관찰 전용 Docker 이미지·진입점
 scripts/run-local.py        # 로컬 API·Worker·프런트 통합 실행
 tests/                      # 백엔드와 프런트의 계약·회귀 검증
 ```
@@ -166,6 +170,7 @@ tests/                      # 백엔드와 프런트의 계약·회귀 검증
 - **사용자가 정상 결과에서 [사이트 들어가기]를 누르기 전까지 QR 목적지에 사용자 브라우저가 접속하지 않도록 한다.**
 - QR 목적지에 `fetch`, iframe, 웹뷰, 이미지, 링크 미리보기, favicon, `prefetch`, `preconnect` 등을 사용하지 않는다. 우리 API와 우리 API가 제공한 스크린샷 이미지만 로드한다.
 - 스크린샷은 `<img>`로 표시한다. 백엔드가 수집한 HTML·JS·SVG 원문을 주입하거나 iframe·`object`·`embed`로 실행하지 않는다. 이미지 URL도 우리 백엔드의 허용된 출처·경로인지 검증한다. Blob URL을 만들면 사용 종료 후 해제한다.
+- 자체 API가 `previewImage`의 PNG bytes를 base64로 전달할 때도 같은 원칙을 적용한다. 서버는 PNG 실제 디코딩·픽셀·용량을 검증하고, 프런트는 검사 ID·MIME·시그니처·용량을 확인해 Blob 이미지만 만든다. 이 경로를 임의의 `data:` URL·SVG·HTML·외부 미리보기 URL 허용으로 확장하지 않는다.
 - URL 입력에는 표준 `URL` API를 사용한다. 입력 경계에서만 프로토콜 없는 웹 주소에 `https://`를 보완하고, API 전송·응답과 실제 접속 목적지에는 절대 `http:`·`https:` 주소만 허용한다. `javascript:`, `data:`, `file:`, 프로토콜 상대 주소, 사용자명·비밀번호가 포함된 주소는 거부한다. 프런트 검증을 서버의 DNS·egress 검증으로 설명하지 않는다.
 - 실제 도메인은 길거나 유니코드를 포함해도 식별할 수 있도록 보여준다. URL의 쿼리·해시에 담긴 토큰이나 개인정보는 기본 화면에 불필요하게 노출하지 않는다.
 - 검사에 필요한 URL은 명세에 따라 우리 백엔드의 요청 본문에만 전달한다. 앱 주소의 경로·쿼리·해시, 콘솔·분석 도구·오류 로그에 QR 원문을 남기지 않는다.
@@ -195,8 +200,12 @@ tests/                      # 백엔드와 프런트의 계약·회귀 검증
 - Worker는 `--network none`, 비루트·읽기 전용 파일시스템·리소스 제한·seccomp·Chromium 샌드박스를 유지한다. 플래그만 바꿔 격리가 검증됐다고 주장하지 않는다. 임의의 실제 로그인·결제·폼 제출은 금지한다.
 - 선택적인 `--public-preview`도 Docker 네트워크 `none`을 유지한다. loopback 프록시·표준 입출력 터널·호스트 TCP 중계기로 공개 IPv4의 80/443만 연결하며 DNS 반환 주소 검증과 숫자 IP 고정을 보존한다. TLS 인증서 검증을 끄지 않고 내부/메타데이터 주소를 허용하지 않는다. GET·HEAD 등 HTTPS 요청 정책은 브라우저 라우팅에 의존함을 독립적인 방화벽 보증과 구분한다. 기존 컨테이너의 모드·이미지가 다르면 자동 교체하지 않고 실행을 거부한다.
 - 로컬 Docker 통합 실행은 Worker PNG를 네트워크가 차단된 Phishpedia 이미지에 전달해 로고 후보와 기준 도메인을 비교한다. 모델 미식별·실패를 정상 판정 근거로 사용하지 않고, 로고 유사도 분석을 운영 주체 인증이나 성능 검증 완료로 설명하지 않는다.
-- Vercel 공개 정적 검사와 로컬 Docker 통합 실행을 구분한다. 공개 API의 실제 HTTPS 요청·응답과 배포 상태를 확인하기 전에는 배포 완료라고 보고하지 않는다. 공개 Google 키는 서버 환경 변수의 민감한 값으로 관리하고 빌드 출력·업로드 소스·로그에서 제외한다. `.vercelignore`에는 공개 API의 소스 의존성만 포함한다.
-- 공개 구성의 로컬 재현은 `app.public_api:app`를 8001 포트에 실행하고 `node scripts/prepare-vercel.mjs --public` 뒤 `PORT=8086 QR_GUARD_API=http://127.0.0.1:8001 node scripts/dev-server.mjs --public`로 확인한다. 이는 휴대전화 하드웨어 QR 촬영이나 실제 외부 배포 검증을 대신하지 않는다.
+- 클라우드 Worker는 `worker/cloud/Dockerfile`을 `worker/` 컨텍스트에서 빌드한다. Dockerfile 전용 ignore로 필요한 runner·분석 모듈·고정된 의존성만 이미지에 포함하고 모델 캐시·URL 입력·PNG·서버 키는 넣지 않는다. 이미지 tag의 존재를 검증 완료로 해석하지 말고 VCR의 `@sha256:` digest를 서버 설정에 고정한다.
+- 공개 클라우드 활성화 설정은 `QR_GUARD_CLOUD_WORKER_IMAGE`와 `QR_GUARD_CLOUD_WORKER_VERIFIED=true`다. 후자는 실제 VM 방화벽·IPv6 차단·Chromium 샌드박스·PNG 회수 검증 후에만 설정한다. 플래그만 켜서 네트워크 검증을 대신하지 않는다. Google 키·Vercel SDK 인증·OIDC 자격 증명은 API 서버에만 두고 VM에 전달하지 않는다.
+- 요청별 VM에는 검증된 사설망·메타데이터 차단 정책을 강제한다. 현재 플랫폼의 서브넷 규칙과 별도로 VM의 모든 IPv6 인터페이스를 비활성화하고 읽어서 확인한 뒤 Chromium을 실행한다. URL·DNS 검사는 추가 방어이며 DNS 재바인딩의 네트워크 경계를 대신하지 않는다. runner의 `chromiumSandbox: true`를 유지하고 이를 끄는 우회로 성공을 만들지 않는다.
+- VM에서는 `/tmp/qr-input.json`을 읽는 `node /app/cloud/run.cjs`를 명시적으로 실행한다. Docker 이미지의 ENTRYPOINT/CMD가 자동 실행된다고 가정하지 않는다. 제한된 결과 JSON·PNG를 회수한 후 성공·오류·취소 경로 모두에서 VM을 정리한다. 요청 URL이나 PNG를 명령 인자·표준 출력·로그에 넣지 않고 임시 파일과 API 응답으로만 취급한다. 관찰 runner의 기본 실행 제한은 20초이며 이미지 부팅·회수와 함수 전체 제한을 구분한다.
+- Vercel 공개 클라우드 관찰과 로컬 Docker 통합 실행을 구분한다. 공개 API의 실제 HTTPS 요청·응답과 배포 상태를 확인하기 전에는 배포 완료라고 보고하지 않는다. 공개 Google 키는 서버 환경 변수의 민감한 값으로 관리하고 빌드 출력·업로드 소스·로그에서 제외한다. `.vercelignore`에는 공개 API의 소스 의존성만 포함하며 Worker 이미지는 별도로 빌드·배포한다.
+- 공개 구성의 로컬 재현은 `app.public_api:app`를 8001 포트에 실행하고 `node scripts/prepare-vercel.mjs --public --cloud-preview` 뒤 `PORT=8086 QR_GUARD_API=http://127.0.0.1:8001 node scripts/dev-server.mjs --public`로 확인한다. 클라우드 서버 설정·SDK 인증이 없다면 실제 VM 방문까지 확인한 것이 아니다. 휴대전화 하드웨어 QR 촬영과 실제 외부 배포 검증도 별도로 확인한다.
 
 - 변경 전 현재 파일·지침·Git 변경 상태를 확인하고 기존 작업을 보존한다. 사용자가 요청한 범위만 변경하며 문서 작성 요청을 앱 구현이나 백엔드 변경으로 확대하지 않는다.
 - 로컬 실행에는 저장소 루트에서 `python3 -m http.server 8080 --bind 127.0.0.1` 같은 정적 서버를 사용한다. ES Modules를 사용하는 페이지를 `file://`로 검증하지 않는다. 이 정적 서버를 백엔드 API 서버로 간주하지 않는다.

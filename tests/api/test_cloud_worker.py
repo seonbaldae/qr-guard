@@ -73,6 +73,15 @@ class FakeBox:
         self.returncode = returncode
         self.sysctl_returncode, self.ipv6_verify_returncode = sysctl_returncode, ipv6_verify_returncode
         self.sysctl_error = sysctl_error
+        self.cleanup_calls = []
+
+    async def stop(self):
+        self.cleanup_calls.append("stop")
+
+    async def destroy(self, *, delete_orphan_snapshots):
+        assert delete_orphan_snapshots is True
+        self.cleanup_calls.append("destroy")
+        self.exited = True
 
     async def run_process(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
@@ -94,6 +103,11 @@ class Factory:
     def __call__(self, **kwargs):
         self.options.append(kwargs)
         return self
+
+    def __await__(self):
+        async def create():
+            return self.box
+        return create().__await__()
 
     async def __aenter__(self):
         return self.box
@@ -121,6 +135,7 @@ def test_real_sdk_policy_and_process_contract_keep_credentials_out_of_vm():
     (result, png), factory, box = run()
     assert result.inspection_complete and result.status == "completed"
     assert png == png_bytes() and box.exited
+    assert box.cleanup_calls == ["stop", "destroy"]
     assert result.model_dump(by_alias=True)["domAnalysis"]["passwordFieldCount"] == 0
     assert "evidence" not in result.model_dump()
     options = factory.options[0]
@@ -273,3 +288,187 @@ def test_missing_image_disables_client_and_tags_are_rejected():
     for image in ["worker:latest", "https://vcr.vercel.com/image", "worker@sha256:short", "mcr.microsoft.com/playwright@sha256:" + "a" * 64]:
         with pytest.raises(ValueError, match="pinned"):
             CloudWorkerClient(image)
+
+
+def test_cancellation_during_browser_execution_still_stops_and_destroys_vm():
+    async def scenario():
+        started = asyncio.Event()
+
+        class RunningBox(FakeBox):
+            async def run_process(self, command, args, **kwargs):
+                if "/app/cloud/run.cjs" in args:
+                    started.set()
+                    await asyncio.Event().wait()
+                return await super().run_process(command, args, **kwargs)
+
+        box = RunningBox()
+        client = CloudWorkerClient(IMAGE, factory=Factory(box), resolver=public_dns)
+        task = asyncio.create_task(client.analyze("scan_123", TARGET))
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert box.cleanup_calls == ["stop", "destroy"] and box.exited
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phase", ["stop", "destroy"])
+def test_repeated_cancellation_during_cleanup_waits_for_destroy_before_propagating(phase):
+    async def scenario():
+        stopping, release = asyncio.Event(), asyncio.Event()
+
+        class StoppingBox(FakeBox):
+            async def stop(self):
+                self.cleanup_calls.append("stop")
+                if phase == "stop":
+                    stopping.set()
+                    await release.wait()
+
+            async def destroy(self, *, delete_orphan_snapshots):
+                assert delete_orphan_snapshots
+                self.cleanup_calls.append("destroy")
+                if phase == "destroy":
+                    stopping.set()
+                    await release.wait()
+                self.exited = True
+
+        box = StoppingBox()
+        client = CloudWorkerClient(IMAGE, factory=Factory(box), resolver=public_dns)
+        task = asyncio.create_task(client.analyze("scan_123", TARGET))
+        await asyncio.wait_for(stopping.wait(), 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and box.cleanup_calls == (["stop"] if phase == "stop" else ["stop", "destroy"])
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert box.cleanup_calls == ["stop", "destroy"] and box.exited
+
+    asyncio.run(scenario())
+
+
+def test_outer_timeout_during_cleanup_is_propagated_after_destroy():
+    async def scenario():
+        stopping, release = asyncio.Event(), asyncio.Event()
+
+        class StoppingBox(FakeBox):
+            async def stop(self):
+                self.cleanup_calls.append("stop")
+                stopping.set()
+                await release.wait()
+
+        box = StoppingBox()
+        client = CloudWorkerClient(IMAGE, factory=Factory(box), resolver=public_dns)
+        task = asyncio.create_task(client.analyze("scan_123", TARGET))
+        await asyncio.wait_for(stopping.wait(), 1)
+        asyncio.get_running_loop().call_later(0.02, release.set)
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.005):
+                await task
+        assert task.cancelled() and box.cleanup_calls == ["stop", "destroy"] and box.exited
+
+    asyncio.run(scenario())
+
+
+def test_failed_stop_still_attempts_destroy_without_exposing_error_text():
+    class FailedStopBox(FakeBox):
+        async def stop(self):
+            self.cleanup_calls.append("stop")
+            raise RuntimeError("PRIVATE SDK token")
+
+    box = FailedStopBox()
+    with pytest.raises(CloudWorkerError, match="worker_unreachable") as caught:
+        run(box)
+    assert box.cleanup_calls == ["stop", "destroy"] and box.exited
+    assert "PRIVATE" not in str(caught.value)
+
+
+@pytest.mark.parametrize("phase", ["stop", "destroy"])
+def test_each_cleanup_phase_is_bounded_and_stop_timeout_does_not_skip_destroy(monkeypatch, phase):
+    monkeypatch.setattr("app.cloud_worker.CLEANUP_OPERATION_TIMEOUT_SECONDS", 0.005)
+
+    async def scenario():
+        cancelled = asyncio.Event()
+
+        class StalledCleanupBox(FakeBox):
+            async def stop(self):
+                self.cleanup_calls.append("stop")
+                if phase == "stop":
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.set()
+
+            async def destroy(self, *, delete_orphan_snapshots):
+                assert delete_orphan_snapshots
+                self.cleanup_calls.append("destroy")
+                if phase == "destroy":
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.set()
+                self.exited = True
+
+        box = StalledCleanupBox()
+        client = CloudWorkerClient(IMAGE, factory=Factory(box), resolver=public_dns)
+        with pytest.raises(CloudWorkerError, match="worker_unreachable"):
+            await asyncio.wait_for(client.analyze("scan_123", TARGET), 0.2)
+        await asyncio.wait_for(cancelled.wait(), 0.2)
+        assert box.cleanup_calls == ["stop", "destroy"]
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_is_preserved_even_when_stop_fails():
+    async def scenario():
+        stopping, release = asyncio.Event(), asyncio.Event()
+
+        class FailedStopBox(FakeBox):
+            async def stop(self):
+                self.cleanup_calls.append("stop")
+                stopping.set()
+                await release.wait()
+                raise RuntimeError("PRIVATE cleanup error")
+
+        box = FailedStopBox()
+        client = CloudWorkerClient(IMAGE, factory=Factory(box), resolver=public_dns)
+        task = asyncio.create_task(client.analyze("scan_123", TARGET))
+        await asyncio.wait_for(stopping.wait(), 1)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert box.cleanup_calls == ["stop", "destroy"] and box.exited
+
+    asyncio.run(scenario())
+
+
+def test_stop_that_ignores_cancellation_cannot_delay_destroy_or_response(monkeypatch):
+    monkeypatch.setattr("app.cloud_worker.CLEANUP_OPERATION_TIMEOUT_SECONDS", 0.005)
+
+    async def scenario():
+        release, lingering = asyncio.Event(), None
+
+        class StubbornStopBox(FakeBox):
+            async def stop(self):
+                nonlocal lingering
+                lingering = asyncio.current_task()
+                self.cleanup_calls.append("stop")
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+
+        box = StubbornStopBox()
+        client = CloudWorkerClient(IMAGE, factory=Factory(box), resolver=public_dns)
+        with pytest.raises(CloudWorkerError, match="worker_unreachable"):
+            await asyncio.wait_for(client.analyze("scan_123", TARGET), 0.2)
+        assert box.cleanup_calls == ["stop", "destroy"] and box.exited
+        assert lingering is not None and not lingering.done()
+        release.set()
+        await lingering
+
+    asyncio.run(scenario())
