@@ -296,6 +296,29 @@ test('공개 피싱 판정은 신고 준비 중과 미확인 건수를 표시하
   assert(opened.length === 0, '피싱 결과에서 목적지를 열었습니다.');
 });
 
+test('공개 목록 미일치는 판단 보류로 접속을 막고 조회 실패를 미탐지라고 설명하지 않는다', async ({ app, opened, mock }) => {
+  let lookupFailed = false;
+  mock((request) => jsonResponse(scanResponse(request.body.url, {
+    verdict: 'inconclusive', analysisScope: 'static', reportAvailable: false, finalUrl: null,
+    providers: [{ name: 'google_safe_browsing', status: lookupFailed ? 'failed' : 'checked', matched: lookupFailed ? null : false }],
+  })));
+  enterUrl(app);
+  let page = await resultPage(app);
+  let verdict = page.shadowRoot.querySelector('qr-verdict-summary');
+  assert(verdict.shadowRoot.querySelector('h2').textContent.includes('판단을 보류'), '목록 미일치를 정상 결과로 안내했습니다.');
+  assert(verdict.shadowRoot.querySelector('.copy').textContent.includes('사이트 화면과 동작은 확인하지 못했어요'), '미관찰 범위 안내가 없습니다.');
+  noDestinationLinks(app);
+  assert(opened.length === 0, '판단 보류에서 목적지를 열었습니다.');
+  page.shadowRoot.querySelector('.rescan').click();
+  await waitUntil(() => find(app.shadowRoot, 'qr-scan-page'));
+  lookupFailed = true;
+  enterUrl(app);
+  page = await resultPage(app);
+  verdict = page.shadowRoot.querySelector('qr-verdict-summary');
+  assert(!verdict.shadowRoot.querySelector('.copy').textContent.includes('발견되지 않았지만'), '조회 실패를 목록 미일치로 설명했습니다.');
+  noDestinationLinks(app);
+});
+
 test('주소 검사 로딩은 화면 미확인 범위를 안내한다', async ({ app, mock }) => {
   mock(() => new Promise(() => {}));
   enterUrl(app);

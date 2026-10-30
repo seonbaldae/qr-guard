@@ -41,7 +41,9 @@ def test_public_scan_finishes_in_one_request_and_never_claims_a_screenshot():
             result = response.json()
             assert result["status"] == "completed" and result["mode"] == "static"
             assert result["analysisScope"] == "static"
-            assert result["verdict"]["level"] == "no_known_threat"
+            assert result["verdict"]["level"] == "unknown"
+            assert result["staticAnalysis"]["providers"][0]["status"] == "checked"
+            assert result["staticAnalysis"]["providers"][0]["matched"] is False
             assert result["requestedUrl"] == "https://example.test/path?review=public"
             sandbox = result["sandboxAnalysis"]
             assert sandbox["status"] == "not_requested" and sandbox["skipReason"] == "static_only"
@@ -55,6 +57,24 @@ def test_public_scan_finishes_in_one_request_and_never_claims_a_screenshot():
             # The returned identifier correlates this result; it is not a
             # serverless job or a claim that another instance can retrieve it.
             assert (await api.get(f'/api/scans/{result["scanId"]}')).status_code == 404
+    asyncio.run(scenario())
+
+
+def test_unlisted_mock_page_is_not_promoted_to_clear_and_keeps_observed_signals():
+    async def scenario():
+        target = "http://survey-training.example.test/login"
+        async with client(create_public_app(threat_check=fake_google())) as api:
+            result = (await api.post("/api/analyze", json={"url": target})).json()
+            assert result["status"] == "completed"
+            assert result["verdict"]["level"] == "unknown"
+            assert result["verdict"]["reasons"] == [
+                "알려진 위협 목록에서는 발견되지 않았지만 사이트 화면과 동작을 검사하지 않아 판단을 보류했습니다."
+            ]
+            provider = result["staticAnalysis"]["providers"][0]
+            assert provider["status"] == "checked" and provider["matched"] is False
+            assert any(item["kind"] == "plain_http" for item in result["staticAnalysis"]["signals"])
+            assert result["sandboxAnalysis"]["status"] == "not_requested"
+            assert result["sandboxAnalysis"]["finalUrl"] is None
     asyncio.run(scenario())
 
 
@@ -149,6 +169,9 @@ def test_brand_check_is_not_claimed_by_a_static_lookup():
                 "url": "https://example.test/", "expectedBrand": "naver",
             })).json()
             assert result["verdict"]["level"] == "unknown"
+            assert result["staticAnalysis"]["providers"][0]["status"] == "checked"
+            assert result["staticAnalysis"]["providers"][0]["matched"] is False
+            assert "사이트 화면과 동작을 검사하지 않아 판단을 보류" in result["verdict"]["reasons"][0]
     asyncio.run(scenario())
 
 

@@ -3,7 +3,7 @@
 2026-10-31에 기존 Vercel 프로젝트 `qr-guard`에 Production 배포를 완료했습니다.
 
 - 접속: [QR Guard](https://qr-guard-five.vercel.app/)
-- 배포 ID: `dpl_GcYL51G4Dd7a42NPeC51RDNfjkMB` (`READY`)
+- 배포 ID: `dpl_5ML87NX2DqsfXX5EX2fJzf49fg4M` (`READY`)
 - 실행 환경: Node.js 24 빌드, Python 3.12 API, HTTPS
 - 배포 소스: 공개 프런트와 정적 API의 명시적인 43개 파일. Worker 파일은 포함하지 않았습니다.
 
@@ -11,8 +11,8 @@
 
 휴대전화에서 공개 주소를 열어 카메라를 켜거나 주소를 직접 입력하면 Vercel의
 `POST /api/analyze`가 Google Safe Browsing과 URL 구조 검사를 수행합니다.
-정상 완료된 미탐지 결과에서만 원본 사이트로 이동하는 버튼을 제공합니다.
-알려진 위협에는 이동 버튼을 제공하지 않습니다. 검사 전에는 사용자 브라우저가
+Google 목록에 없는 주소도 화면과 동작을 검사하지 않았으므로 판단을 보류하고
+이동 버튼을 제공하지 않습니다. 알려진 위협은 위험으로 경고합니다. 검사 전에는 사용자 브라우저가
 QR 목적지에 접속하지 않습니다.
 
 **현재 공개 버전은 주소 검사만 수행합니다.** Docker Worker가 수정 중이므로
@@ -44,15 +44,15 @@ Worker 소스를 바꾸더라도 공개 API가 해당 모듈을 가져오거나 
 | 확인 | 결과 |
 | --- | --- |
 | 쿠키·로그인 없는 `GET /api/health` | 200, `direct/static` |
-| `https://example.com/` 검사 | Google `checked`, `matched: false`, `no_known_threat` |
+| `https://example.com/` 검사 | Google `checked`, `matched: false`; 초기 배포의 `no_known_threat`를 `unknown` 판단 보류로 보완 |
 | Google 공식 피싱 테스트 주소 검사 | Google `checked`, `matched: true`, `malicious` |
-| 공개 브라우저 화면 | 주소 입력 → 로딩 → 실제 정상·위험 응답 표시 |
+| 공개 브라우저 화면 | 주소 입력 → 로딩 → 판단 보류 또는 위험 경고 표시 |
 | 위험 결과 | 접속 버튼 없음, 신고 준비 중·건수 미확인 |
 | 다른 Origin의 POST | 403 |
 | 잘못된 프로토콜 | 422 |
 | `/.env`, `/app/public_api.py`, `/worker/worker.cjs` | 모두 404 |
-| 브라우저 회귀 | 서비스 43개, UI 17개 통과 |
-| Python 회귀 | 415개 통과. Google 대역 테스트와 위 실제 공개 조회를 구분합니다. |
+| 브라우저 회귀 | 서비스 43개, UI 18개 통과 |
+| Python 회귀 | 416개 통과. Google 대역 테스트와 위 실제 공개 조회를 구분합니다. |
 
 모바일 390px 화면을 확인했으며 콘솔 오류·경고가 없었습니다. 실제 휴대전화의
 하드웨어 QR 촬영은 이번 확인에 포함하지 않았습니다. HTTPS는 카메라 사용에 필요한
@@ -61,6 +61,11 @@ Worker 소스를 바꾸더라도 공개 API가 해당 모듈을 가져오거나 
 
 Google 목록에 없는 신규 사칭이나 화면·동작에만 드러나는 위험은 놓칠 수 있습니다.
 미탐지는 사이트 안전이나 공식 운영 여부의 인증이 아닙니다.
+
+2026-10-31에 자체 모의 사칭 주소가 Google 목록 미일치 후 정상 계열로 표시되는 경로를 확인했습니다.
+공개 정적 검사의 목록 미일치는 제공자 결과로 보존하되 최종 판정을 `unknown`으로 보류하도록 보완합니다.
+이 변경은 정상 오인과 접속 유도를 줄이는 조치입니다. Docker의 공개 배포나 시각·행위 기반 탐지를
+추가한 변경은 아닙니다.
 
 관련 플랫폼 문서: [Python 파일 기반 함수](https://vercel.com/docs/functions/runtimes/python/api-directory),
 [Python 실행 환경](https://vercel.com/docs/functions/runtimes/python),

@@ -186,9 +186,9 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
                 evidence_ids=[item.id for item in evidence if item.kind == "known_threat_match"],
                 limitations=[SCOPE_NOTICE, WORKER_NOTICE],
             )
-        elif checked and request.expected_brand is None:
+        elif checked:
             verdict = VerdictResult(
-                level="no_known_threat", reasons=["정적 검사 범위에서 알려진 위협이 발견되지 않았습니다."],
+                level="unknown", reasons=["알려진 위협 목록에서는 발견되지 않았지만 사이트 화면과 동작을 검사하지 않아 판단을 보류했습니다."],
                 limitations=[SCOPE_NOTICE, WORKER_NOTICE, "검사 결과는 안전을 보증하지 않습니다."],
             )
         else:

@@ -25,7 +25,9 @@ export class QrVerdictSummary extends HTMLElement {
     this.shadowRoot.querySelector('section').className=`summary ${verdict}`;
     this.shadowRoot.querySelector('.mark').innerHTML=icon(text.icon,31);
     const addressOnly=value?.analysisScope==='static'&&verdict==='clear';
-    this.shadowRoot.querySelector('h2').textContent=addressOnly?'주소 검사에서 위협 미탐지':text.title;
-    this.shadowRoot.querySelector('.copy').textContent=addressOnly?'사이트 화면과 최종 목적지는 확인하지 않았어요. 주소를 확인한 뒤 이동해 주세요.':text.copy;
+    const staticHold=value?.analysisScope==='static'&&verdict==='inconclusive'
+      &&Array.isArray(value.providers)&&value.providers.some(provider=>provider.name==='google_safe_browsing'&&provider.status==='checked'&&provider.matched===false);
+    this.shadowRoot.querySelector('h2').textContent=staticHold?'사이트 판단을 보류했어요':addressOnly?'주소 검사에서 위협 미탐지':text.title;
+    this.shadowRoot.querySelector('.copy').textContent=staticHold?'알려진 위협 목록에서는 발견되지 않았지만 사이트 화면과 동작은 확인하지 못했어요.':addressOnly?'사이트 화면과 최종 목적지는 확인하지 않았어요. 주소를 확인한 뒤 이동해 주세요.':text.copy;
   }
 }
