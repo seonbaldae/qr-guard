@@ -1,4 +1,5 @@
 import '../../src/main.js';
+import { urlVerdictDemoResponse } from '../../src/data/url-verdict-demo.js';
 
 const fixture = document.getElementById('fixture');
 const results = document.getElementById('results');
@@ -414,6 +415,50 @@ test('실제 API 네트워크 실패가 데모 성공으로 대체되지 않음'
   assert(requests.length === 1, 'API 실패 후 불필요한 추가 요청이 발생했습니다.');
   assert(!find(app.shadowRoot, 'qr-result-page'), '연결 실패를 데모 결과로 바꿨습니다.');
   assert(app.shadowRoot.querySelector('.demo-banner').hidden, '실제 검사 요청이 데모 모드로 전환됐습니다.');
+});
+
+test('지정 URL 데모의 로딩·결과 표시는 활성 상태를 따르고 재스캔하면 초기화된다', async ({ app, requests, opened, mock }) => {
+  mock((request) => jsonResponse(scanResponse(request.body.url, { verdict: 'inconclusive', finalUrl: null })));
+  for (const [url, reason] of [
+    ['https://realistic-phishing-website.vercel.app/', '로고와 주소 불일치'],
+    ['https://fake-phishing-website.vercel.app/', '동적 판단에서 감지'],
+  ]) {
+    const enabled = urlVerdictDemoResponse(url) !== null;
+    const before = requests.length;
+    enterUrl(app, url);
+    const banner = app.shadowRoot.querySelector('.demo-banner');
+    assert(find(app.shadowRoot, 'qr-loading-page') && banner.hidden === !enabled, '로딩 화면에서 URL 데모 여부를 표시하지 않았습니다.');
+    const page = await resultPage(app);
+    assert(banner.hidden === !enabled, '결과 화면에서 URL 데모 여부를 표시하지 않았습니다.');
+    assert(requests.length - before === (enabled ? 0 : 1), 'URL 데모 활성 상태와 검사 요청이 다릅니다.');
+    if (enabled) {
+      assert(banner.textContent.includes('데모 응답 · 실제 검사 아님'), '실제 검사와 구별하는 안내가 없습니다.');
+      assert(page.shadowRoot.querySelector('.decision-reasons').textContent.includes(reason), 'URL별 탐지 사유가 표시되지 않았습니다.');
+      const button = page.shadowRoot.querySelector('.main-action');
+      assert(button.disabled && button.textContent.includes('신고 기능 준비 중'), '모의 결과에서 실제 신고를 허용했습니다.');
+      assert(page.shadowRoot.getElementById('report-count').textContent === '확인 불가', '모의 신고 건수를 만들었습니다.');
+      assert(page.shadowRoot.getElementById('final').textContent.includes('미확인'), '방문하지 않은 도착 주소를 만들었습니다.');
+      button.click();
+      page.dispatchEvent(new CustomEvent('report-request', { bubbles: true, composed: true }));
+      page.dispatchEvent(new CustomEvent('open-site-request', { bubbles: true, composed: true }));
+    }
+    noDestinationLinks(app);
+    assert(opened.length === 0 && requests.length - before === (enabled ? 0 : 1), '모의 결과에서 목적지 접속·신고 요청이 발생했습니다.');
+    page.shadowRoot.querySelector('.rescan').click();
+    assert(find(app.shadowRoot, 'qr-scan-page') && banner.hidden, '재스캔 후 URL 데모 표시가 남았습니다.');
+  }
+});
+
+test('지정 URL 검사 취소는 데모 표시를 지우고 늦은 결과를 표시하지 않는다', async ({ app, requests, mock }) => {
+  const url = 'https://fake-phishing-website.vercel.app/';
+  const enabled = urlVerdictDemoResponse(url) !== null;
+  mock(() => new Promise(() => {}));
+  enterUrl(app, url);
+  find(app.shadowRoot, 'qr-loading-page').shadowRoot.querySelector('.cancel').click();
+  assert(find(app.shadowRoot, 'qr-scan-page') && app.shadowRoot.querySelector('.demo-banner').hidden, '취소 후 촬영 화면과 데모 표시가 초기화되지 않았습니다.');
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert(!find(app.shadowRoot, 'qr-result-page'), '취소한 URL 검사의 늦은 결과를 표시했습니다.');
+  assert(enabled ? requests.length === 0 : requests.every((request) => request.signal.aborted), '취소한 검사 요청을 정리하지 않았습니다.');
 });
 
 test('다시 스캔과 앱 재마운트는 검사·입력 상태를 초기화', async ({ app, mock }) => {

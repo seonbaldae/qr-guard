@@ -4,6 +4,7 @@ import { analyzeUrl } from '../../src/services/scan-api.js';
 import { reportSite } from '../../src/services/report-api.js';
 import { loadInlinePreviewImage, loadPreviewImage } from '../../src/services/preview-api.js';
 import { createRequestScope, waitFor } from '../../src/services/http.js';
+import { urlVerdictDemoResponse } from '../../src/data/url-verdict-demo.js';
 
 const TEST_URL = 'https://example.test/survey';
 const INLINE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwbPoGAAKRAapHxV+yAAAAAElFTkSuQmCC';
@@ -382,6 +383,63 @@ export async function runServiceTests() {
   await test('API 오류를 데모 성공으로 대체하지 않는다', async () => {
     await withFetch(async () => new Response('', { status: 503 }), async () => {
       await rejects(() => analyzeUrl(TEST_URL), (error) => error.code === 'http');
+    });
+  });
+  await test('지정 URL 데모는 비활성 상태에서 API를 유지하고 활성 상태에서만 다른 탐지 사유를 표시한다', async () => {
+    for (const [input, reason] of [
+      ['HTTPS://REALISTIC-PHISHING-WEBSITE.VERCEL.APP:443', '로고와 주소 불일치'],
+      ['https://fake-phishing-website.vercel.app/', '동적 판단에서 감지'],
+    ]) {
+      const url = validateUrl(input);
+      const enabled = urlVerdictDemoResponse(url) !== null;
+      let calls = 0;
+      await withFetch(async () => {
+        calls += 1;
+        return new Response(JSON.stringify(response({ requestedUrl: url, verdict: 'inconclusive' })));
+      }, async () => {
+        const result = await analyzeUrl(input, { source: 'manual' });
+        assert(result.demo === enabled && calls === (enabled ? 0 : 1), 'URL 데모의 활성 상태와 API 요청이 다릅니다.');
+        if (!enabled) { assert(result.verdict === 'inconclusive'); return; }
+        assert(result.status === 'completed' && result.verdict === 'phishing');
+        assert(result.reasons.some((item) => item.includes(reason)), 'URL별 탐지 사유가 다릅니다.');
+        assert(result.finalUrl === null && result.previewUrl === null && result.previewImage === null);
+        assert(result.reportAvailable === false && result.reportCount === null && result.isReported === null);
+        await rejects(() => reportSite(result), (error) => error.code === 'report_unavailable');
+        assert(calls === 0, 'URL 데모가 실제 검사·이미지·신고를 요청했습니다.');
+      });
+    }
+  });
+  await test('지정 URL 데모는 다른 프로토콜·포트·경로·쿼리·유사 도메인에 적용되지 않는다', async () => {
+    const urls = [
+      'http://realistic-phishing-website.vercel.app/',
+      'https://fake-phishing-website.vercel.app:8443/',
+      'https://realistic-phishing-website.vercel.app/survey',
+      'https://fake-phishing-website.vercel.app/?demo=1',
+      'https://fake-phishing-website.vercel.app/#demo',
+      'https://fake-phishing-website.vercel.app.evil.test/',
+      'https://sub.realistic-phishing-website.vercel.app/',
+    ];
+    let calls = 0;
+    await withFetch(async (_endpoint, options) => {
+      calls += 1;
+      return new Response(JSON.stringify(response({ requestedUrl: JSON.parse(options.body).url, verdict: 'inconclusive' })));
+    }, async () => {
+      for (const url of urls) {
+        assert(urlVerdictDemoResponse(validateUrl(url)) === null, '지정하지 않은 URL에 데모를 적용했습니다.');
+        assert(!(await analyzeUrl(url)).demo, '지정하지 않은 URL이 실제 API를 우회했습니다.');
+      }
+    });
+    assert(calls === urls.length);
+  });
+  await test('지정 URL 검사는 데모 활성 여부와 관계없이 취소할 수 있다', async () => {
+    const controller = new AbortController();
+    await withFetch(async (_endpoint, options) => {
+      await waitFor(100, options.signal);
+      throw new Error('취소된 API 요청을 계속 진행했습니다.');
+    }, async () => {
+      const waiting = analyzeUrl('https://fake-phishing-website.vercel.app/', { signal: controller.signal });
+      controller.abort();
+      await rejects(() => waiting, (error) => error.name === 'AbortError');
     });
   });
   await test('잘못된 JSON을 검사 성공으로 처리하지 않는다', async () => {

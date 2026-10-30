@@ -1,5 +1,6 @@
 import { frontendConfig } from '../config.js';
 import { demoResponse } from '../data/demo-fixtures.js';
+import { urlVerdictDemoResponse } from '../data/url-verdict-demo.js';
 import { validateUrl } from '../utils/url.js';
 import { createRequestScope, requestJson, scopedError, ServiceError, waitFor } from './http.js';
 import { normalizeScanResponse, safeScanId } from './response-adapter.js';
@@ -11,7 +12,8 @@ export async function analyzeUrl(rawUrl, { signal, mode = 'live', source = 'qr',
   const scope = createRequestScope(signal);
   try {
     scope.signal.throwIfAborted();
-    onProgress?.({ stage: 'analysis', message: mode === 'demo' ? '데모 검사 응답을 준비하고 있어요' : frontendConfig.scanMode === 'static' ? '주소를 검사하고 있어요' : '사이트를 검사하고 있어요' });
+    const urlDemo = mode === 'live' ? urlVerdictDemoResponse(url) : null;
+    onProgress?.({ stage: 'analysis', message: mode === 'demo' || urlDemo ? '데모 검사 응답을 준비하고 있어요' : frontendConfig.scanMode === 'static' ? '주소를 검사하고 있어요' : '사이트를 검사하고 있어요' });
     if (mode === 'demo') {
       if (!DEMO_SCENARIOS.has(scenario)) throw new ServiceError('지원하지 않는 데모 시나리오입니다.', 'demo');
       await waitFor(frontendConfig.demoDelayMs, scope.signal);
@@ -20,6 +22,10 @@ export async function analyzeUrl(rawUrl, { signal, mode = 'live', source = 'qr',
     }
     if (mode !== 'live') throw new ServiceError('검사 모드 설정을 확인해 주세요.', 'configuration');
     if (!['qr', 'manual'].includes(source)) throw new ServiceError('검사 요청의 입력 출처를 확인해 주세요.', 'configuration');
+    if (urlDemo) {
+      await waitFor(frontendConfig.demoDelayMs, scope.signal);
+      return normalizeScanResponse(urlDemo, url, { demo: true });
+    }
     let raw;
     if (frontendConfig.scanTransport === 'direct') {
       raw = await requestJson(frontendConfig.analyzePath, { body: { url, source }, method: 'POST', signal: scope.signal });

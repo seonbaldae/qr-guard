@@ -10,7 +10,7 @@ from PIL import Image
 
 from app.cloud_worker import (
     CloudWorkerClient, CloudWorkerError, DENIED_SUBNETS, INPUT_PATH, MAX_PNG_BYTES,
-    MAX_RESULT_BYTES, RESULT_PATH, SCREENSHOT_PATH,
+    MAX_RESULT_BYTES, RESULT_PATH, SCREENSHOT_PATH, IPV6_SYSCTL_ARGS, VERIFY_IPV6_DISABLED,
 )
 
 IMAGE = "team/project/qr-worker@sha256:" + "a" * 64
@@ -66,13 +66,22 @@ class FakeFS:
 
 
 class FakeBox:
-    def __init__(self, body=None, png=None, process_error=None, returncode=0):
+    def __init__(self, body=None, png=None, process_error=None, returncode=0,
+                 sysctl_returncode=0, ipv6_verify_returncode=0, sysctl_error=None):
         self.fs = FakeFS(body or result_body(), png if png is not None else png_bytes())
         self.calls, self.exited, self.process_error = [], False, process_error
         self.returncode = returncode
+        self.sysctl_returncode, self.ipv6_verify_returncode = sysctl_returncode, ipv6_verify_returncode
+        self.sysctl_error = sysctl_error
 
     async def run_process(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
+        if command == "sysctl":
+            if self.sysctl_error:
+                raise self.sysctl_error
+            return SimpleNamespace(returncode=self.sysctl_returncode)
+        if command == "node" and args[0] == "-e":
+            return SimpleNamespace(returncode=self.ipv6_verify_returncode)
         if self.process_error:
             raise self.process_error
         return SimpleNamespace(returncode=self.returncode, stdout="private remote output", stderr="private remote error")
@@ -123,13 +132,32 @@ def test_real_sdk_policy_and_process_contract_keep_credentials_out_of_vm():
     assert policy.mode == "custom" and dict(policy.allow) == {"*": ()}
     assert policy.subnets.deny == DENIED_SUBNETS and policy.subnets.allow is None
     assert _serialize_network_policy(policy) == {"allow": {"*": []}, "subnets": {"deny": list(DENIED_SUBNETS)}}
-    assert "::/0" in policy.subnets.deny and "168.63.129.16/32" in policy.subnets.deny
-    assert box.calls == [("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
+    assert "::/0" not in policy.subnets.deny and "168.63.129.16/32" in policy.subnets.deny
+    assert box.calls == [("sysctl", IPV6_SYSCTL_ARGS,
+                         {"sudo": True, "kill_after": 5, "capture_output": True, "check": True}),
+                        ("node", ["-e", VERIFY_IPV6_DISABLED],
+                         {"kill_after": 3, "capture_output": True, "check": True}),
+                        ("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
                          {"cwd": "/app", "kill_after": 25, "capture_output": True, "check": False})]
     assert box.fs.writes[0][0] == INPUT_PATH
     assert json.loads(box.fs.writes[0][1]) == {"scanId": "scan_123", "url": TARGET, "timeoutMs": 20000}
     assert box.fs.reads == [(RESULT_PATH, MAX_RESULT_BYTES + 1), (SCREENSHOT_PATH, MAX_PNG_BYTES + 1)]
     assert set(box.fs.closed) == {RESULT_PATH, SCREENSHOT_PATH}
+
+
+@pytest.mark.parametrize("options,expected_calls", [
+    ({"sysctl_returncode": 1}, 1), ({"ipv6_verify_returncode": 1}, 2),
+    ({"sysctl_error": PermissionError("PRIVATE sudo failed")}, 1),
+])
+def test_ipv6_bootstrap_failure_cleans_vm_before_input_or_browser(options, expected_calls):
+    box = FakeBox(**options)
+    with pytest.raises(CloudWorkerError, match="worker_policy_blocked") as caught:
+        run(box)
+    assert caught.value.blocked and box.exited
+    assert len(box.calls) == expected_calls
+    assert not any("/app/cloud/run.cjs" in args for _, args, _ in box.calls)
+    assert box.fs.writes == [] and box.fs.reads == []
+    assert "PRIVATE" not in str(caught.value)
 
 
 @pytest.mark.parametrize("url", [

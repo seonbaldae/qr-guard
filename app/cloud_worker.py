@@ -30,11 +30,26 @@ INPUT_PATH = "/tmp/qr-input.json"
 RESULT_PATH = "/tmp/qr-result.json"
 SCREENSHOT_PATH = "/tmp/qr-shot.png"
 DENIED_SUBNETS = (
-    "::/0", "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
     "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
     "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
     "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "168.63.129.16/32",
 )
+# Vercel's custom subnet policy currently accepts IPv4 CIDRs only. Before the
+# untrusted page runs, disable IPv6 in the VM kernel and verify every interface.
+IPV6_SYSCTL_ARGS = ["-w", "net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1",
+                    "net.ipv6.conf.lo.disable_ipv6=1"]
+VERIFY_IPV6_DISABLED = """const fs = require('node:fs');
+try {
+  const root = '/proc/sys/net/ipv6/conf';
+  const entries = fs.readdirSync(root);
+  if (!['all', 'default', 'lo'].every(name => entries.includes(name))) process.exit(1);
+  for (const name of entries) {
+    if (fs.readFileSync(root + '/' + name + '/disable_ipv6', 'utf8').trim() !== '1') process.exit(1);
+  }
+  if (fs.readFileSync('/proc/net/if_inet6', 'utf8').trim()) process.exit(1);
+} catch { process.exit(1); }
+"""
 _DENIED_NETWORKS = tuple(ipaddress.ip_network(item) for item in DENIED_SUBNETS)
 _IMAGE = re.compile(r"^(?:vcr\.vercel\.com/)?[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*){0,2}@sha256:[0-9a-f]{64}$")
 _SCAN_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -181,6 +196,22 @@ async def _read_bounded(fs: Any, path: str, maximum: int) -> bytes:
     return data
 
 
+async def _disable_ipv6(box: Any) -> None:
+    try:
+        applied = await box.run_process("sysctl", IPV6_SYSCTL_ARGS, sudo=True,
+                                        kill_after=5, capture_output=True, check=True)
+        if applied.returncode != 0:
+            raise ValueError
+        verified = await box.run_process("node", ["-e", VERIFY_IPV6_DISABLED],
+                                         kill_after=3, capture_output=True, check=True)
+        if verified.returncode != 0:
+            raise ValueError
+    except Exception:
+        # A missing kernel control or unavailable sudo must never fall through
+        # to visiting the page with a partially applied network policy.
+        raise CloudWorkerError("worker_policy_blocked", blocked=True) from None
+
+
 class CloudWorkerClient:
     def __init__(self, image: str | None, *, factory: Callable[..., Any] | None = None,
                  resolver: Callable[[str, int], Awaitable[list[str]]] | None = None):
@@ -224,6 +255,7 @@ class CloudWorkerClient:
             async with asyncio.timeout(65):
                 async with factory(image=self.image, persistent=False, execution_time_limit=45,
                                    resources=SandboxResources(vcpus=1, memory=2048), network_policy=policy) as box:
+                    await _disable_ipv6(box)
                     await box.fs.write_text(INPUT_PATH, json.dumps({"scanId": scan_id, "url": url, "timeoutMs": 20000}))
                     process = await box.run_process("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
                                                     cwd="/app", kill_after=25, capture_output=True, check=False)

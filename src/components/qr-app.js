@@ -3,12 +3,13 @@ import { validateUrl } from '../utils/url.js';
 import { analyzeUrl } from '../services/scan-api.js';
 import { reportSite } from '../services/report-api.js';
 import { demoUrls } from '../data/demo-fixtures.js';
+import { urlVerdictDemoResponse } from '../data/url-verdict-demo.js';
 import { frontendConfig } from '../config.js';
 
 export class QrApp extends HTMLElement {
   constructor() {
     super();this.attachShadow({mode:'open'});
-    this._generation=0;this._depth='scan';this._mode='live';this._source='qr';this._scenario='clear';this._url=null;this._result=null;
+    this._generation=0;this._depth='scan';this._mode='live';this._source='qr';this._scenario='clear';this._url=null;this._result=null;this._urlDemo=false;
     this.shadowRoot.innerHTML=`<style>${sharedStyles}
       :host { min-height:100svh; display:block; background:#fff; }
       main { width:100%; max-width:480px; min-height:100svh; margin:0 auto; padding:max(36px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom)); }
@@ -35,13 +36,13 @@ export class QrApp extends HTMLElement {
   }
   abort() { this._generation+=1;this._scanController?.abort();this._reportController?.abort();this._reportBusy=false; }
   reset(writeHistory=true) {
-    this.abort();this._depth='scan';this._mode='live';this._source='qr';this._url=null;this._result=null;this._scenario='clear';
+    this.abort();this._depth='scan';this._mode='live';this._source='qr';this._url=null;this._result=null;this._scenario='clear';this._urlDemo=false;
     if(writeHistory) history.replaceState({qrGuardDepth:'scan'},'',location.href);
     this.showPage('qr-scan-page');
   }
   showPage(name) {
     const page=document.createElement(name);this.shadowRoot.getElementById('page').replaceChildren(page);
-    this.shadowRoot.querySelector('.demo-banner').hidden=this._mode!=='demo';
+    this.shadowRoot.querySelector('.demo-banner').hidden=this._mode!=='demo'&&!this._urlDemo;
     if(name!=='qr-scan-page'||this._hasShownPage) page.focusHeading?.();
     window.scrollTo({top:0,behavior:'auto'});
     this._hasShownPage=true;
@@ -54,9 +55,10 @@ export class QrApp extends HTMLElement {
     const previousDepth=this._depth;this.abort();
     const generation=this._generation;
     this._url=url;this._mode=mode;this._source=source;this._scenario=scenario;this._result=null;this._scanFailed=false;this._depth='loading';
+    this._urlDemo=mode==='live'&&Boolean(urlVerdictDemoResponse(url));
     if(previousDepth==='scan') history.pushState({qrGuardDepth:'loading'},'',location.href);
     else history.replaceState({qrGuardDepth:'loading'},'',location.href);
-    const page=this.showPage('qr-loading-page');page.url=url;page.analysisScope=mode==='live'?frontendConfig.scanMode:null;
+    const page=this.showPage('qr-loading-page');page.url=url;page.analysisScope=mode==='live'&&!this._urlDemo?frontendConfig.scanMode:null;
     const controller=new AbortController();this._scanController=controller;
     try {
       const result=await analyzeUrl(url,{signal:controller.signal,mode,source,scenario,onProgress:progress=>{if(generation===this._generation)page.progress=progress;}});
