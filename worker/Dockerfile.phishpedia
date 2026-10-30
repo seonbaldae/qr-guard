@@ -1,0 +1,33 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/root/.pixi/bin:${PATH}"
+ENV PIXI_NO_TELEMETRY=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       curl \
+       git \
+       build-essential \
+       unzip \
+       libgl1 \
+       libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://pixi.sh/install.sh \
+       -o /tmp/install-pixi.sh \
+    && bash /tmp/install-pixi.sh \
+    && rm /tmp/install-pixi.sh
+
+WORKDIR /opt/phishpedia
+
+COPY third_party/Phishpedia/ ./
+
+# 컨테이너 안의 설정만 Linux AMD64 / Python 3.10으로 제한합니다.
+RUN sed -i 's/^platforms = .*/platforms = ["linux-64"]/' pixi.toml \
+    && sed -i 's/^python = .*/python = "3.10.*"/' pixi.toml
+
+RUN pixi install
+
+CMD ["pixi", "run", "python", "--version"]

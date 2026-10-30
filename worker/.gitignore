@@ -1,0 +1,24 @@
+# 비밀정보
+.env
+.env.*
+!.env.example
+
+# 설치 환경과 외부 모델
+node_modules/
+third_party/
+.pixi/
+__pycache__/
+*.pyc
+*.pth
+*.pth.tar
+*.pkl
+*.npy
+
+# 검사 입력·결과
+phish-input/
+*.png
+
+# 임시·백업 파일
+.DS_Store
+*.bak
+*.before-observer*

@@ -1,0 +1,10 @@
+FROM seonbaldae-browser
+
+WORKDIR /app
+
+COPY worker.cjs .
+COPY observer.cjs .
+
+EXPOSE 4000
+
+CMD ["node", "worker.cjs"]
