@@ -51,16 +51,29 @@ Worker가 실행 중일 때 저장소의 `worker` 디렉터리에서 실행합�
 
 ## Phishpedia
 외부 소스, 모델 가중치, 브랜드 자료와 캐시는 Git에 포함하지 않습니다.
-Dockerfile.phishpedia 빌드 전 third_party/Phishpedia 소스를 준비해야 합니다.
-사용한 소스 버전은 PHISHPEDIA_REVISION에 기록합니다.
+Docker 빌드가 `PHISHPEDIA_REVISION`에 기록된 커밋을 직접 받고 로컬 패치를 적용합니다.
+팀원이 별도로 `third_party/Phishpedia`나 `.cache/*.npy`를 준비할 필요가 없습니다.
+
+저장소의 `worker` 디렉터리에서 순서대로 빌드합니다.
+
+    docker build --platform linux/amd64 \
+      -f Dockerfile.phishpedia \
+      -t seonbaldae-phishpedia-env .
+
+    docker build --platform linux/amd64 \
+      -f Dockerfile.phishpedia-model \
+      -t seonbaldae-phishpedia .
+
+두 번째 이미지에는 모델, 기준 로고 자료, `LOGO_FEATS.npy`, `LOGO_FILES.npy`가 모두
+포함됩니다. 이후 `scan.cjs`는 호스트 캐시를 마운트하지 않습니다.
 
 현재 개발 환경은 ARM Mac에서 linux/amd64 에뮬레이션을 사용합니다.
 
 ## 검증 상태
 - Worker 작업 처리 및 PNG 반환: 로컬 테스트 확인
 - Phishpedia 환경·모델 이미지 빌드: 확인
-- Phishpedia 실제 분석: 오류 수정 후 재검증 필요
-- patches의 수정 내용을 이미지에 적용하는 자동화: 미완료
+- Phishpedia 실제 분석: 로컬 전체 흐름 확인
+- patches의 수정 내용을 이미지에 적용하는 자동화: 완료
 - API 서버와 최종 판정 통합: 미완료
 
 브랜드 미검출 또는 분석 실패를 정상 판정으로 사용하지 않습니다.
