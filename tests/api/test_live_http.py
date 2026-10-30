@@ -8,8 +8,10 @@ import sys
 import time
 
 import httpx
+import pytest
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="subprocess pass_fds is not supported on Windows")
 def test_uvicorn_real_http_roundtrip():
     root = Path(__file__).resolve().parents[2]
     environment = {key: value for key, value in os.environ.items() if not key.startswith("QR_GUARD_")}
