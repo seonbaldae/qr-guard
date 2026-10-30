@@ -1,6 +1,6 @@
 import { sharedStyles } from '../styles/shared-styles.js';
 import { icon } from '../utils/icons.js';
-import { loadPreviewImage } from '../services/preview-api.js';
+import { loadInlinePreviewImage, loadPreviewImage } from '../services/preview-api.js';
 
 export class QrSitePreview extends HTMLElement {
   constructor() {
@@ -22,10 +22,14 @@ export class QrSitePreview extends HTMLElement {
     const image=this.shadowRoot.querySelector('img'); image.removeAttribute('src'); image.hidden=true;
     this.shadowRoot.querySelector('.caption').hidden=true;
     this.shadowRoot.querySelector('.empty').hidden=false;
-    this.shadowRoot.querySelector('.empty p').textContent=value?.previewUrl?'미리보기를 불러오고 있어요':(value?.previewMessage||'미리보기가 없어요');
-    if(value?.previewUrl) {
+    const hasPreview=Boolean(value?.previewImage||value?.previewUrl);
+    this.shadowRoot.querySelector('.empty p').textContent=hasPreview?'미리보기를 불러오고 있어요':(value?.previewMessage||'미리보기가 없어요');
+    if(hasPreview) {
       const controller=new AbortController();this._controller=controller;
-      loadPreviewImage(value.previewUrl,{signal:controller.signal,demo:value.demo}).then(blob=>{
+      const loading=value.previewImage
+        ?loadInlinePreviewImage(value.previewImage,{signal:controller.signal,scanId:value.scanId})
+        :loadPreviewImage(value.previewUrl,{signal:controller.signal,demo:value.demo});
+      loading.then(blob=>{
         if(generation!==this._generation||!this.isConnected)return;
         this._objectUrl=URL.createObjectURL(blob);
         image.alt=value.demo?'데모용으로 제작한 사이트 미리보기 이미지':'격리 환경에서 촬영한 사이트의 정적 미리보기';

@@ -8,6 +8,7 @@ const originalOpen = window.open;
 const originalHistoryState = history.state;
 const originalUrl = location.href;
 const tests = [];
+const INLINE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwbPoGAAKRAapHxV+yAAAAAElFTkSuQmCC';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -111,6 +112,34 @@ function noDestinationLinks(app) {
   assert(allDeep(app.shadowRoot, 'a[href]').every((anchor) => new URL(anchor.href, location.href).origin === location.origin), '피싱 결과에 목적지 링크가 있습니다.');
   assert(!allDeep(app.shadowRoot, 'button').some((button) => button.textContent.includes('사이트 들어가기')), '접속 불가 판정에 접속 버튼이 있습니다.');
 }
+
+test('격리 PNG를 정적 Blob 이미지로 표시하고 재스캔 시 해제하며 목적지를 요청하지 않는다', async ({ app, requests, opened, mock }) => {
+  mock((request) => jsonResponse({
+    scanId: 'ui-scan', requestedUrl: request.body.url, status: 'completed', mode: 'sandbox', analysisScope: 'sandbox',
+    staticAnalysis: { status: 'completed', signals: [], providers: [], limitations: [] },
+    sandboxAnalysis: { status: 'completed', finalUrl: 'https://destination.example.test/checked', httpStatus: 200,
+      screenshot: { status: 'ready', available: true }, signals: [], limitations: [] },
+    previewImage: { scanId: 'ui-scan', mimeType: 'image/png', base64: INLINE_PNG },
+    verdict: { level: 'unknown', reasons: ['화면을 관찰했으며 브랜드 판단은 보류했습니다.'], evidenceIds: [], limitations: [] },
+    evidence: [], reportAvailable: false, reportCount: null,
+  }));
+  enterUrl(app);
+  const page = await resultPage(app);
+  const preview = page.shadowRoot.querySelector('qr-site-preview');
+  const image = preview.shadowRoot.querySelector('img');
+  await waitUntil(() => !image.hidden && image.complete && image.naturalWidth === 1, '격리 PNG를 실제 이미지로 디코딩하지 못했습니다.');
+  const objectUrl = image.src;
+  assert(objectUrl.startsWith('blob:') && !preview.shadowRoot.querySelector('.caption').hidden, '정적 Blob 이미지가 아닙니다.');
+  assert(requests.length === 1 && opened.length === 0, '이미지 표시 중 추가 요청이나 목적지 접속이 발생했습니다.');
+  noDestinationLinks(app);
+  const revoked = [];
+  const originalRevoke = URL.revokeObjectURL;
+  URL.revokeObjectURL = (value) => { revoked.push(value); originalRevoke.call(URL, value); };
+  try {
+    page.shadowRoot.querySelector('.rescan').click();
+    assert(revoked.includes(objectUrl) && find(app.shadowRoot, 'qr-scan-page'), '이전 미리보기 자원을 해제하지 않았습니다.');
+  } finally { URL.revokeObjectURL = originalRevoke; }
+});
 
 function test(name, run) { tests.push({ name, run }); }
 

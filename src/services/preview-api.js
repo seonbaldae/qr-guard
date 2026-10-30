@@ -1,9 +1,17 @@
 import { createRequestScope, scopedError, ServiceError } from './http.js';
-import { previewUrl } from './response-adapter.js';
+import { decodeInlinePreview, previewUrl } from './response-adapter.js';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const DEMO_IMAGES = new Set(['/assets/demo-clear.svg', '/assets/demo-phishing.svg']);
+
+export async function loadInlinePreviewImage(raw, { signal, scanId } = {}) {
+  signal?.throwIfAborted();
+  const bytes = decodeInlinePreview(raw, scanId);
+  if (!bytes) throw new ServiceError('미리보기 이미지의 형식을 확인하지 못했습니다.', 'invalid_preview');
+  signal?.throwIfAborted();
+  return new Blob([bytes], { type: 'image/png' });
+}
 
 export async function loadPreviewImage(raw, { signal, demo = false } = {}) {
   const url = previewUrl(raw, { demo });

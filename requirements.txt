@@ -4,3 +4,5 @@ httpx>=0.28,<1
 pydantic>=2.14,<3
 tldextract>=5.4,<6
 Pillow>=11,<14
+vercel==0.12.1
+vercel-sandbox==0.10.0

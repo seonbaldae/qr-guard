@@ -9,7 +9,7 @@ export const frontendConfig = Object.freeze({
   createScanPath: '/api/scans',
   scanPath: (scanId) => `/api/scans/${encodeURIComponent(scanId)}`,
   reportPath: (scanId) => `/api/scans/${encodeURIComponent(scanId)}/reports`,
-  requestTimeoutMs: 60000,
+  requestTimeoutMs: 90000,
   pollIntervalMs: 1200,
   demoDelayMs: 1400,
 });

@@ -1,11 +1,13 @@
 import { validateUrl, normalizeInputUrl, displayUrl } from '../../src/utils/url.js';
-import { normalizeScanResponse, previewUrl } from '../../src/services/response-adapter.js';
+import { MAX_INLINE_PREVIEW_BYTES, normalizeScanResponse, previewUrl } from '../../src/services/response-adapter.js';
 import { analyzeUrl } from '../../src/services/scan-api.js';
 import { reportSite } from '../../src/services/report-api.js';
-import { loadPreviewImage } from '../../src/services/preview-api.js';
+import { loadInlinePreviewImage, loadPreviewImage } from '../../src/services/preview-api.js';
 import { createRequestScope, waitFor } from '../../src/services/http.js';
 
 const TEST_URL = 'https://example.test/survey';
+const INLINE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwbPoGAAKRAapHxV+yAAAAAElFTkSuQmCC';
+const inlinePreview = (overrides = {}) => ({ scanId: 'test-123', mimeType: 'image/png', base64: INLINE_PNG, ...overrides });
 const response = (overrides = {}) => ({
   scanId: 'test-123', requestedUrl: TEST_URL, status: 'completed', verdict: 'clear',
   finalUrl: null, reportCount: 0, isReported: false, reportedByUser: false,
@@ -177,6 +179,57 @@ export async function runServiceTests() {
       await rejects(() => loading, (error) => error.name === 'AbortError');
       assert(called === 1);
     });
+  });
+  await test('격리 PNG를 현재 검사에 연결하고 추가 이미지 요청 없이 Blob으로 만든다', async () => {
+    const result = normalizeScanResponse(backendReport({
+      analysisScope: 'sandbox', previewImage: inlinePreview(), reportAvailable: false,
+      verdict: { level: 'unknown', reasons: ['브랜드 여부는 확인하지 못했습니다.'], evidenceIds: [], limitations: [] },
+    }), TEST_URL);
+    assert(result.previewImage?.scanId === result.scanId && result.previewUrl === null);
+    assert(result.verdict === 'inconclusive' && result.finalUrl === TEST_URL);
+    await withFetch(async () => { throw new Error('PNG를 받으려고 새 요청을 보내면 안 됩니다.'); }, async () => {
+      const blob = await loadInlinePreviewImage(result.previewImage, { scanId: result.scanId });
+      assert(blob.type === 'image/png' && blob.size === atob(INLINE_PNG).length);
+    });
+  });
+  await test('다른 검사·SVG·잘못된 base64·PNG 시그니처는 미리보기만 실패하고 판정을 정상으로 만들지 않는다', async () => {
+    for (const image of [
+      inlinePreview({ scanId: 'old-scan' }), inlinePreview({ mimeType: 'image/svg+xml' }),
+      inlinePreview({ base64: 'data:image/png;base64,' + INLINE_PNG }),
+      inlinePreview({ base64: 'not valid base64' }), inlinePreview({ base64: btoa('<svg></svg>') }),
+    ]) {
+      const result = normalizeScanResponse(backendReport({
+        previewImage: image, analysisScope: 'sandbox',
+        verdict: { level: 'unknown', reasons: [], evidenceIds: [], limitations: [] },
+      }), TEST_URL);
+      assert(result.previewImage === null && result.previewUrl === null && result.previewStatus === 'failed');
+      assert(result.verdict === 'inconclusive' && result.previewMessage.includes('형식'));
+      await rejects(() => loadInlinePreviewImage(image, { scanId: 'test-123' }), (error) => error.code === 'invalid_preview');
+    }
+    const unavailable = backendReport({ previewImage: inlinePreview() });
+    unavailable.sandboxAnalysis.screenshot.available = false;
+    assert(normalizeScanResponse(unavailable, TEST_URL).previewImage === null, '이미지 준비 상태를 무시했습니다.');
+    const staticOnly = normalizeScanResponse(backendReport({ mode: 'static', analysisScope: 'static', previewImage: inlinePreview() }), TEST_URL);
+    assert(staticOnly.previewImage === null && staticOnly.previewUrl === null, '주소 검사만으로 이미지를 표시했습니다.');
+  });
+  await test('2MiB JSON의 PNG를 검사 응답으로 받고 1.5MiB 상한 초과는 거부한다', async () => {
+    const png = atob(INLINE_PNG);
+    const base64 = btoa(png + '\0'.repeat(MAX_INLINE_PREVIEW_BYTES - png.length));
+    await withFetch(async (_endpoint, options) => {
+      assert(options.method === 'POST' && JSON.parse(options.body).url === TEST_URL);
+      return new Response(JSON.stringify(backendReport({ previewImage: inlinePreview({ base64 }), analysisScope: 'sandbox' })), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }, async () => {
+      const result = await analyzeUrl(TEST_URL);
+      const blob = await loadInlinePreviewImage(result.previewImage, { scanId: result.scanId });
+      assert(blob.size === MAX_INLINE_PREVIEW_BYTES && result.previewUrl === null);
+    });
+    await rejects(() => loadInlinePreviewImage(inlinePreview({ base64: btoa(png + '\0'.repeat(MAX_INLINE_PREVIEW_BYTES + 1 - png.length)) }), {
+      scanId: 'test-123',
+    }), (error) => error.code === 'invalid_preview');
+    const controller = new AbortController(); controller.abort();
+    await rejects(() => loadInlinePreviewImage(inlinePreview(), { scanId: 'test-123', signal: controller.signal }), (error) => error.name === 'AbortError');
   });
   await test('미확인 신고 건수는 0으로 바꾸지 않고 신고 이력과 사용자 완료를 구분한다', () => {
     const result = normalizeScanResponse(response({ reportCount: -1, isReported: true }), TEST_URL);

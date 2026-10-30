@@ -1,0 +1,11 @@
+**
+!cloud
+!cloud/Dockerfile
+!cloud/run.cjs
+!cloud/package.json
+!cloud/package-lock.json
+!destination-policy.cjs
+!observer.cjs
+!network-analyzer.cjs
+!redirect-analyzer.cjs
+!dom-analyzer.cjs

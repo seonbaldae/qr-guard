@@ -47,11 +47,38 @@ const BACKEND_VERDICTS = new Map([
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const listOf = (value) => (Array.isArray(value) ? value : []);
 
+export const MAX_INLINE_PREVIEW_BYTES = 1536 * 1024;
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+
+// Inline image bytes come from our analysis response, never from a target URL.
+// Actual PNG decoding is performed by the server and again by the browser <img>.
+export function decodeInlinePreview(raw, expectedScanId) {
+  if (!isObject(raw) || !safeScanId(expectedScanId) || raw.scanId !== expectedScanId
+      || raw.mimeType !== 'image/png' || typeof raw.base64 !== 'string'
+      || !raw.base64.length || raw.base64.length > Math.ceil(MAX_INLINE_PREVIEW_BYTES / 3) * 4
+      || raw.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(raw.base64)) return null;
+  try {
+    const binary = atob(raw.base64);
+    if (btoa(binary) !== raw.base64 || binary.length < PNG_SIGNATURE.length || binary.length > MAX_INLINE_PREVIEW_BYTES
+        || !PNG_SIGNATURE.every((value, index) => binary.charCodeAt(index) === value)) return null;
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeInlinePreview(raw, expectedScanId) {
+  if (!decodeInlinePreview(raw, expectedScanId)) return null;
+  return Object.freeze({ scanId: expectedScanId, mimeType: 'image/png', base64: raw.base64 });
+}
+
 const WORKER_ERRORS = new Map([
   ['worker_not_configured', '격리 브라우저가 아직 연결되지 않았습니다.'],
   ['worker_egress_unverified', '격리 환경의 네트워크 검증이 완료되지 않아 방문하지 않았습니다.'],
   ['target_not_allowed', '이 주소는 격리 미리보기 허용 대상이 아닙니다.'],
   ['worker_blocked', '격리 브라우저의 접근 정책으로 방문이 차단되었습니다.'],
+  ['worker_policy_blocked', '격리 환경의 접근 정책으로 일부 페이지를 확인하지 못했습니다.'],
+  ['unsafe_target', '내부망 등 허용되지 않은 주소여서 방문하지 않았습니다.'],
   ['worker_destination_not_allowed', '허용되지 않은 주소로 이동하여 방문을 중단했습니다.'],
   ['worker_timeout', '제한 시간 안에 사이트 화면을 확인하지 못했습니다.'],
   ['worker_unreachable', '격리 브라우저에 연결하지 못했습니다.'],
@@ -99,6 +126,10 @@ function flattenBackendReport(raw) {
     finalUrl: sandbox.finalUrl,
     screenshotUrl: scanId && screenshot.status === 'ready' && screenshot.available === true
       ? `/api/scans/${scanId}/screenshot` : null,
+    ...(Object.prototype.hasOwnProperty.call(raw, 'previewImage') ? {
+      previewImage: raw.previewImage,
+      inlinePreviewAvailable: screenshot.status === 'ready' && screenshot.available === true,
+    } : {}),
     signals: [...listOf(staticPart.signals), ...listOf(sandbox.signals)],
     reasons: verdictPart?.reasons,
     verdictEvidenceIds: verdictPart?.evidenceIds,
@@ -178,8 +209,15 @@ export function normalizeScanResponse(raw, expectedUrl, { demo = false } = {}) {
       checkedAt: timestamp(item.checkedAt),
     }];
   }) : [];
+  const scanId = safeScanId(raw.scanId);
+  const inlineProvided = Object.prototype.hasOwnProperty.call(raw, 'previewImage');
+  const inlineImage = analysisScope === 'sandbox' && raw.previewStatus === 'ready' && raw.inlinePreviewAvailable !== false
+    ? normalizeInlinePreview(raw.previewImage, scanId) : null;
+  const invalidInline = analysisScope !== 'static' && inlineProvided && !inlineImage
+    && (raw.previewImage != null || raw.previewStatus === 'ready');
+  if (invalidInline) limitations.push('미리보기 이미지의 형식을 확인하지 못해 표시하지 않았습니다.');
   return {
-    scanId: safeScanId(raw.scanId),
+    scanId,
     requestedUrl,
     finalUrl,
     status,
@@ -188,9 +226,10 @@ export function normalizeScanResponse(raw, expectedUrl, { demo = false } = {}) {
     reportAvailable: raw.reportAvailable === undefined ? true : raw.reportAvailable === true,
     reasons: listOf(raw.reasons).filter((item) => typeof item === 'string' && item.trim()).slice(0, 20).map((item) => plainText(item)),
     verdictEvidenceIds: listOf(raw.verdictEvidenceIds).filter((id) => safeScanId(id)).slice(0, 50),
-    previewUrl: analysisScope === 'static' ? null : previewUrl(raw.screenshotUrl, { demo }),
-    previewMessage: plainText(raw.previewMessage) || '미리보기가 없어요',
-    previewStatus: ['not_requested', 'pending', 'ready', 'failed', 'skipped', 'expired', 'cancelled'].includes(raw.previewStatus) ? raw.previewStatus : null,
+    previewUrl: analysisScope === 'static' || inlineProvided ? null : previewUrl(raw.screenshotUrl, { demo }),
+    previewImage: inlineImage,
+    previewMessage: invalidInline ? '미리보기 이미지의 형식을 확인하지 못했어요' : plainText(raw.previewMessage) || '미리보기가 없어요',
+    previewStatus: invalidInline ? 'failed' : ['not_requested', 'pending', 'ready', 'failed', 'skipped', 'expired', 'cancelled'].includes(raw.previewStatus) ? raw.previewStatus : null,
     reportCount: safeCount(raw.reportCount),
     isReported: typeof raw.isReported === 'boolean' ? raw.isReported : null,
     reportedByUser: raw.reportedByUser === true,
