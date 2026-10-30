@@ -6,9 +6,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# 비밀값, 인증 정보
+# 비밀값, 인증 정보 (키는 .env.example을 복사한 .env에 넣고 커밋하지 않는다)
 .env
 .env.*
+!.env.example
 
 # 피싱 피드 다운로드본 (로컬 캐시)
 data/feeds/

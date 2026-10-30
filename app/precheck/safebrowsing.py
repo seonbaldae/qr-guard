@@ -8,14 +8,15 @@
 개인정보: Lookup API는 URL을 Google에 보낸다. 그래서 보내기 전에 쿼리, 프래그먼트,
 아이디/비밀번호를 제거하고 스킴+호스트+경로만 보낸다. Evidence와 로그에도 URL 원문을 넣지 않는다.
 
-API 키는 환경변수 SAFE_BROWSING_API_KEY로만 받는다. 키는 요청 주소(?key=)에 들어가므로
-오류 메시지를 결과에 옮기지 않는다. 키가 없거나 조회에 실패하면 "깨끗함"이 아니라
-"확인 못 함"(status=failed, matched=None)이다.
+API 키는 환경변수 SAFE_BROWSING_API_KEY에서 읽고, 없으면 저장소 루트의 .env 파일에서 읽는다.
+키는 요청 주소(?key=)에 들어가므로 오류 메시지를 결과에 옮기지 않는다.
+키가 없거나 조회에 실패하면 "깨끗함"이 아니라 "확인 못 함"(status=failed, matched=None)이다.
 """
 
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -26,6 +27,7 @@ from app.precheck.schema import Evidence, ProviderResult, Signal
 
 PROVIDER_NAME = "google-safebrowsing"
 API_KEY_ENV = "SAFE_BROWSING_API_KEY"
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 ENDPOINT = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 _CLIENT = {"clientId": "qr-guard-precheck", "clientVersion": "0.1"}
 _THREAT_TYPES = ["SOCIAL_ENGINEERING", "MALWARE"]
@@ -48,7 +50,7 @@ def check_safe_browsing(
     send: Sender | None = None,
     now: datetime | None = None,
 ) -> SafeBrowsingCheck:
-    key = api_key if api_key is not None else os.environ.get(API_KEY_ENV, "")
+    key = api_key if api_key is not None else _load_api_key()
     if not key.strip():
         return _failed()
     try:
@@ -91,6 +93,22 @@ def check_safe_browsing(
         evidenceIds=[evidence.id],
     )
     return SafeBrowsingCheck(_provider("checked", True, checked_at), [signal], [evidence])
+
+
+def _load_api_key() -> str:
+    """환경변수가 우선이고, 없으면 .env 파일의 SAFE_BROWSING_API_KEY=값 줄을 읽는다."""
+    from_env = os.environ.get(API_KEY_ENV, "").strip()
+    if from_env:
+        return from_env
+    try:
+        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == API_KEY_ENV:
+            return value.strip().strip("\"'")
+    return ""
 
 
 def _request_body(url: str) -> dict[str, Any]:

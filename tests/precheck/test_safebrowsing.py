@@ -119,6 +119,38 @@ def test_missing_key_is_unknown_and_makes_no_call():
     assert send.calls == []
 
 
+@pytest.mark.parametrize(
+    "line",
+    [f"SAFE_BROWSING_API_KEY={KEY}", f'SAFE_BROWSING_API_KEY="{KEY}"', f"  SAFE_BROWSING_API_KEY = '{KEY}'  "],
+)
+def test_key_is_read_from_env_file(monkeypatch, tmp_path, line):
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"# note\nOTHER=1\n{line}\n", encoding="utf-8")
+    monkeypatch.setattr("app.precheck.safebrowsing.ENV_FILE", env_file)
+    send = FakeSend()
+    assert check_safe_browsing("https://example.com/", send=send).provider.status == "checked"
+    assert send.calls[0][1] == KEY
+
+
+def test_environment_variable_wins_over_env_file(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("SAFE_BROWSING_API_KEY=FROM-FILE\n", encoding="utf-8")
+    monkeypatch.setattr("app.precheck.safebrowsing.ENV_FILE", env_file)
+    monkeypatch.setenv(API_KEY_ENV, "FROM-ENV")
+    send = FakeSend()
+    check_safe_browsing("https://example.com/", send=send)
+    assert send.calls[0][1] == "FROM-ENV"
+
+
+def test_env_file_without_the_key_is_unknown(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("OTHER=1\n", encoding="utf-8")
+    monkeypatch.setattr("app.precheck.safebrowsing.ENV_FILE", env_file)
+    send = FakeSend()
+    assert check_safe_browsing("https://example.com/", send=send).provider.status == "failed"
+    assert send.calls == []
+
+
 def test_key_is_read_from_environment(monkeypatch):
     monkeypatch.setenv(API_KEY_ENV, KEY)
     send = FakeSend()
