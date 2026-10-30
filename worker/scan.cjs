@@ -48,12 +48,10 @@ async function requestJson(url, options = {}) {
 async function main() {
     const targetUrl = requestedUrl();
 
-    // Docker에 연결할 로컬 파일을 먼저 확인합니다.
+    // 분석 컨테이너에 연결할 저장소 파일을 먼저 확인합니다.
     for (const file of [
         "run-phishpedia.py",
         "analyze-brand.py",
-        ".cache/LOGO_FEATS.npy",
-        ".cache/LOGO_FILES.npy",
     ]) {
         await fs.access(path.join(ROOT, file));
     }
@@ -167,14 +165,6 @@ async function main() {
             ...mount(
                 path.join(ROOT, "analyze-brand.py"),
                 "/opt/phishpedia/analyze-brand.py"
-            ),
-            ...mount(
-                path.join(ROOT, ".cache/LOGO_FEATS.npy"),
-                "/opt/phishpedia/LOGO_FEATS.npy"
-            ),
-            ...mount(
-                path.join(ROOT, ".cache/LOGO_FILES.npy"),
-                "/opt/phishpedia/LOGO_FILES.npy"
             ),
             // 이번 작업 폴더만 읽기·쓰기 가능하게 연결합니다.
             ...mount(directory, `/input/${scanId}`, false),

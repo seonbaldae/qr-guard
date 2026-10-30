@@ -41,6 +41,24 @@ API는 컨테이너 안의 loopback HTTP 서버에 제한된 `docker exec` 요�
 
 공개 `example.com`을 대상으로 실제 Google 조회·최종 URL·PNG·프런트 결과 표시를 확인했고, 컨테이너의 직접 메타데이터 접근 차단도 확인했습니다. 이 기능은 제한된 해커톤용 로컬 미리보기입니다. VM 수준 격리, 브라우저 탈출 방어, 임의 악성 사이트의 운영 안전성 검증이 완료됐다고 설명하지 마세요.
 
+## Phishpedia
+외부 소스, 모델 가중치, 브랜드 자료와 캐시는 Git에 포함하지 않습니다.
+Docker 빌드가 `PHISHPEDIA_REVISION`에 기록된 커밋을 직접 받고 로컬 패치를 적용합니다.
+팀원이 별도로 `third_party/Phishpedia`나 `.cache/*.npy`를 준비할 필요가 없습니다.
+
+저장소의 `worker` 디렉터리에서 순서대로 빌드합니다.
+
+    docker build --platform linux/amd64 \
+      -f Dockerfile.phishpedia \
+      -t seonbaldae-phishpedia-env .
+
+    docker build --platform linux/amd64 \
+      -f Dockerfile.phishpedia-model \
+      -t seonbaldae-phishpedia .
+
+두 번째 이미지에는 모델, 기준 로고 자료, `LOGO_FEATS.npy`, `LOGO_FILES.npy`가 모두
+포함됩니다. 이후 `scan.cjs`는 호스트 캐시를 마운트하지 않습니다.
+
 ## 이미지 빌드
 
 통합 실행기가 이미지를 준비하지만 별도 빌드가 필요하면 저장소 루트에서 실행합니다.
