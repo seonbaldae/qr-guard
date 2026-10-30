@@ -1,0 +1,5 @@
+# B(정적 분석, app/precheck/) 전용 임시 목록.
+# 팀 공용 requirements.txt가 정해지면 합치거나 삭제한다. (A, C와 합의 필요)
+pydantic>=2.14,<3
+tldextract>=5.4,<6   # 등록 도메인 계산. 오프라인 스냅샷만 사용
+pytest>=9.2          # 개발용
