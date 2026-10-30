@@ -9,7 +9,10 @@ function safeUrl(value, base) {
   }
 }
 
-function createObserver(page, context, scanId) {
+function createObserver(page, context, scanId, {
+  observeNetwork = true,
+  observeNavigation = true,
+} = {}) {
   const evidence = [];
   const signals = [];
 
@@ -67,8 +70,13 @@ function createObserver(page, context, scanId) {
   }
 
   function onDownload(download) {
+    let host = null;
+    try {
+      const target = new URL(download.url());
+      if (["http:", "https:"].includes(target.protocol)) host = target.hostname;
+    } catch { /* 메타데이터 파싱 실패여도 다운로드 취소는 유지합니다. */ }
     add("download_attempt", "파일 다운로드 시도를 관찰했습니다.", {
-      url: safeUrl(download.url()),
+      host,
     }, "medium");
 
     // 파일은 받거나 실행하지 않습니다.
@@ -82,12 +90,14 @@ function createObserver(page, context, scanId) {
     void popup.close().catch(() => {});
   }
 
-  page.on("response", onResponse);
-  page.on("request", onRequest);
+  if (observeNavigation) page.on("response", onResponse);
+  if (observeNetwork) page.on("request", onRequest);
   page.on("download", onDownload);
   context.on("page", onPopup);
 
   return {
+    // 신규 분석기는 기존 증거 ID·신호·저장 상한을 재사용합니다.
+    record: add,
     async collectDom() {
       // 코드는 방문 페이지에서 DOM을 읽기만 합니다.
       // 입력·버튼 클릭·폼 제출은 하지 않습니다.

@@ -2,6 +2,9 @@ const http = require("node:http");
 const fs = require("node:fs/promises");
 const { chromium } = require("playwright");
 const { createObserver } = require("./observer.cjs");
+const { createNetworkAnalyzer } = require("./network-analyzer.cjs");
+const { createRedirectAnalyzer } = require("./redirect-analyzer.cjs");
+const { createDomAnalyzer } = require("./dom-analyzer.cjs");
 
 const jobs = new Map();
 const TEST_URL = "http://127.0.0.1:4000/demo/normal";
@@ -34,6 +37,10 @@ async function readBody(req) {
 
 async function runJob(job) {
   let browser;
+  let observer;
+  let network;
+  let redirect;
+  let dom;
   let expired = false;
 
   job.status = "running";
@@ -60,36 +67,33 @@ async function runJob(job) {
 
     // 개발용 테스트 주소 하나만 허용합니다.
     // 이 제한 자체가 완전한 네트워크 격리는 아닙니다.
-    await context.route("**/*", route => {
+    await context.route("**/*", async route => {
       if (route.request().url() === TEST_URL) {
         return route.continue();
       }
-      return route.abort();
+      // 실제 정책 abort 성공만 차단 근거로 전달합니다.
+      await route.abort();
+      network?.markPolicyBlocked(route.request());
+      redirect?.markPolicyBlocked(route.request());
     });
 
     const page = await context.newPage();
-    const observer = createObserver(page, context, job.scanId);
+    observer = createObserver(page, context, job.scanId, {
+      observeNetwork: false,
+      observeNavigation: false,
+    });
+    // 최초 접속 이전에 등록하고, 기존 observer의 중복 수집은 끕니다.
+    network = createNetworkAnalyzer(page);
+    redirect = createRedirectAnalyzer(page, { initialUrl: job.url });
+    dom = createDomAnalyzer(page);
 
     const response = await page.goto(job.url, {
       waitUntil: "load",
       timeout: 10000,
     });
 
-    job.finalUrl = page.url();
+    job.finalUrl = redirect.result().finalUrl;
     job.httpStatus = response ? response.status() : null;
-
-    // 데모용으로 짧은 관찰 구간을 둡니다.
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    await observer.collectDom();
-    observer.stop();
-
-    const observed = observer.result();
-    job.signals.push(...observed.signals);
-    job.evidence.push(...observed.evidence);
-    job.limitations.push(
-      "초기 로딩과 짧은 관찰 구간만 검사했으며 사용자 상호작용은 수행하지 않았습니다."
-    );
 
     const directory = `/tmp/seonbaldae-scans/${job.scanId}`;
     await fs.mkdir(directory, { recursive: true });
@@ -111,6 +115,13 @@ async function runJob(job) {
     job.screenshotRef = `internal:${job.scanId}:png`;
     job.screenshotStatus = "ready";
 
+    // PNG 준비 상태는 전체 분석 상태와 독립적입니다.
+    // 기존 짧은 관찰 구간 동안에도 이미지는 조회할 수 있습니다.
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (expired) throw new Error("timeout");
+    await dom.collect();
+    if (expired) throw new Error("timeout");
+
     job.evidence.push({
       id: `${job.scanId}-navigation`,
       kind: "navigation",
@@ -123,12 +134,47 @@ async function runJob(job) {
     job.status = "completed";
   } catch (e) {
     job.status = "failed";
-    job.screenshotStatus = "failed";
+    if (job.screenshotStatus !== "ready") job.screenshotStatus = "failed";
     job.errorCode = expired ? "worker_timeout" : "browser_error";
     job.limitations.push("브라우저 검사 또는 캡처를 완료하지 못했습니다.");
-    console.error(job.scanId, e.message);
+    console.error(job.scanId, job.errorCode);
   } finally {
     clearTimeout(timer);
+    // 닫기 이벤트는 관찰 대상이 아니므로 브라우저 종료 전에 해제합니다.
+    network?.stop();
+    redirect?.stop();
+    dom?.stop();
+    observer?.stop();
+    job.networkAnalysis = network?.result() ?? null;
+    job.redirectAnalysis = redirect?.result() ?? null;
+    job.domAnalysis = dom?.result() ?? null;
+    job.finalUrl = job.redirectAnalysis?.finalUrl ?? null;
+    if (observer) {
+      if (job.domAnalysis) {
+        observer.record("dom_observation", "렌더링된 필드와 폼 메타데이터를 관찰했습니다. 제출은 수행하지 않았습니다.", job.domAnalysis);
+      }
+      for (const record of dom?.observations() ?? []) {
+        observer.record(record.kind, "DOM/Form 관찰 범위와 메타데이터입니다.", record);
+      }
+      for (const record of network?.observations() ?? []) {
+        const kinds = { attempted: "network_attempt", response_received: "network_response", network_failed: "network_failure", policy_blocked: "policy_blocked_request" };
+        observer.record(kinds[record.outcome], "접속 시도·응답·실패·정책 차단을 구분한 관찰입니다.", record);
+      }
+      for (const record of redirect?.observations() ?? []) {
+        observer.record(`redirect_${record.kind}`, "메인 프레임의 실제 이동과 이동 시도를 구분한 관찰입니다.", record);
+      }
+      const observed = observer.result();
+      job.signals.push(...observed.signals);
+      job.evidence.push(...observed.evidence);
+      if (observed.evidence.length >= 100) job.limitations.push("증거 저장 상한에 도달하여 일부 메타데이터가 생략됐습니다.");
+    }
+    job.limitations = [...new Set([
+      ...job.limitations,
+      ...(network?.limitations() ?? []),
+      ...(redirect?.limitations() ?? []),
+      ...(dom?.limitations() ?? []),
+      "초기 로딩과 짧은 관찰 구간만 검사했으며 사용자 상호작용은 수행하지 않았습니다.",
+    ])];
     if (browser) await browser.close().catch(() => {});
     busy = false;
   }
@@ -232,6 +278,9 @@ const server = http.createServer(async (req, res) => {
         screenshotRef: null,
         screenshotStatus: "pending",
         capturedAt: null,
+        networkAnalysis: null,
+        redirectAnalysis: null,
+        domAnalysis: null,
         signals: [],
         evidence: [],
         limitations: [
@@ -255,7 +304,7 @@ const server = http.createServer(async (req, res) => {
           busy = false;
           job.status = "failed";
           job.errorCode = "worker_error";
-          console.error(e.message);
+          console.error(job.scanId, "worker_error");
         });
       });
       return;
@@ -300,7 +349,7 @@ const server = http.createServer(async (req, res) => {
 
     error(res, 404, "not_found", "구현되지 않은 경로입니다.");
   } catch (e) {
-    console.error(e.message);
+    console.error("Worker request failed");
     error(res, 400, "request_error", "요청 처리에 실패했습니다.");
   }
 });
