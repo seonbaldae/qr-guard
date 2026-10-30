@@ -29,6 +29,35 @@ export function validateUrl(raw) {
   return parsed.href;
 }
 
+// Only user/QR input gets a default scheme. API responses and destinations must
+// keep using validateUrl(), which requires an explicit HTTP(S) URL.
+export function normalizeInputUrl(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new Error('검사할 사이트 주소를 입력해 주세요.');
+  }
+  const value = raw.trim();
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(value) || /^https?:/i.test(value)) {
+    return validateUrl(value);
+  }
+  if (/^[/?#]/.test(value)) {
+    throw new Error('검사할 웹사이트의 전체 주소를 입력해 주세요.');
+  }
+
+  const normalized = validateUrl(`https://${value}`);
+  const hostname = new URL(normalized).hostname.replace(/\.$/, '');
+  const authority = value.split(/[/?#]/, 1)[0];
+  const labels = hostname.split('.');
+  const isDomain = labels.length > 1
+    && labels.every(label => /^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i.test(label))
+    && /[a-z]/i.test(labels[labels.length - 1]);
+  const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?$/.test(authority);
+  const isIpv6 = authority.startsWith('[');
+  if (!isDomain && !isIpv4 && !isIpv6 && hostname !== 'localhost') {
+    throw new Error('웹사이트 주소가 담긴 QR을 스캔하거나 주소를 확인해 주세요.');
+  }
+  return normalized;
+}
+
 export function displayUrl(raw) {
   try {
     const parsed = new URL(validateUrl(raw));

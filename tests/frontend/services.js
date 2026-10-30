@@ -1,4 +1,4 @@
-import { validateUrl, displayUrl } from '../../src/utils/url.js';
+import { validateUrl, normalizeInputUrl, displayUrl } from '../../src/utils/url.js';
 import { normalizeScanResponse, previewUrl } from '../../src/services/response-adapter.js';
 import { analyzeUrl } from '../../src/services/scan-api.js';
 import { reportSite } from '../../src/services/report-api.js';
@@ -56,6 +56,37 @@ export async function runServiceTests() {
   await test('허용된 절대 HTTP(S) 주소를 정규화한다', () => {
     assert(validateUrl('  HTTPS://EXAMPLE.TEST:443  ') === 'https://example.test/');
     assert(validateUrl('http://example.test/path') === 'http://example.test/path');
+  });
+  await test('프로토콜 없는 웹 주소 입력에 HTTPS를 보완하고 경로·쿼리·포트를 보존한다', () => {
+    for (const [input, expected] of [
+      [' www.example.test/survey?step=1#done ', 'https://www.example.test/survey?step=1#done'],
+      ['example.test:8443/path?x=1#section', 'https://example.test:8443/path?x=1#section'],
+      ['bücher.example.test/책', new URL('https://bücher.example.test/책').href],
+      ['localhost:8080/path', 'https://localhost:8080/path'],
+      ['192.0.2.1:8080/path', 'https://192.0.2.1:8080/path'],
+      ['[2001:db8::1]:8080/path', 'https://[2001:db8::1]:8080/path'],
+    ]) assert(normalizeInputUrl(input) === expected, '입력 주소의 목적지 또는 경로가 바뀌었습니다.');
+  });
+  await test('사용자가 명시한 HTTP와 HTTPS 프로토콜을 변경하지 않는다', () => {
+    assert(normalizeInputUrl('http://example.test/path') === 'http://example.test/path');
+    assert(normalizeInputUrl('https://example.test/path') === 'https://example.test/path');
+  });
+  await test('QR의 일반 텍스트·다른 프로토콜·상대 주소·계정 정보는 웹 주소로 보정하지 않는다', async () => {
+    for (const invalid of [
+      '', '   ', null, 'hello', '2130706433', '1.2', 'WIFI:T:WPA;S:demo;P:demo;;',
+      'javascript:alert(1)', 'javascript://example.test', 'data:text/html,test',
+      'mailto:name@example.test', 'file:///tmp/test', 'ftp://example.test',
+      '/relative', '//example.test', '?step=1', '#section',
+      'example.test/a b', 'example.test/\u200b', 'example.test\\@other.test',
+      'name:secret@example.test', 'example.test:99999', 'https:///example.test',
+    ]) await rejects(() => normalizeInputUrl(invalid));
+  });
+  await test('입력의 HTTPS 보완이 API 응답과 사이트 진입 주소의 엄격한 검증을 완화하지 않는다', async () => {
+    assert(normalizeInputUrl('www.example.test/') === 'https://www.example.test/');
+    await rejects(() => validateUrl('www.example.test/'));
+    await rejects(() => normalizeScanResponse(response({ requestedUrl: 'example.test/survey' }), TEST_URL), (error) => error.code === 'mismatched_response');
+    const result = normalizeScanResponse(response({ finalUrl: 'example.test/landing' }), TEST_URL);
+    assert(result.verdict === 'inconclusive' && result.finalUrl === null);
   });
   await test('실행 가능한 프로토콜·상대 주소·계정 포함 주소를 거부한다', async () => {
     for (const invalid of ['javascript:alert(1)', 'data:text/html,test', '//example.test', 'example.test', 'https://name:secret@example.test', 'https://@example.test', 'https://example.test/\npath', 'https://example.test\\@other.test']) {

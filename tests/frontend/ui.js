@@ -51,11 +51,14 @@ function jsonResponse(payload) {
 function installFetch(handler, requests) {
   window.fetch = (input, options = {}) => {
     const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const method = options.method || 'GET';
     assert(url.origin === location.origin, '외부 서버로 요청했습니다.');
-    assert(url.pathname === '/api/analyze' || /^\/api\/scans\/[\w-]+\/reports$/.test(url.pathname), '허용되지 않은 경로로 요청했습니다.');
-    assert(options.method === 'POST', '검사·신고는 요청 본문을 사용하는 POST여야 합니다.');
+    const creation = method === 'POST' && ['/api/analyze', '/api/scans'].includes(url.pathname);
+    const report = method === 'POST' && /^\/api\/scans\/[\w-]+\/reports$/.test(url.pathname);
+    const polling = method === 'GET' && /^\/api\/scans\/[\w-]+$/.test(url.pathname);
+    assert(creation || report || polling, '허용되지 않은 API 경로·메서드로 요청했습니다.');
     assert(options.redirect === 'error', 'API 리다이렉트 차단 설정이 없습니다.');
-    const request = { path: url.pathname, body: JSON.parse(options.body), signal: options.signal };
+    const request = { path: url.pathname, method, body: options.body === undefined ? null : JSON.parse(options.body), signal: options.signal };
     requests.push(request);
     return new Promise((resolve, reject) => {
       const abort = () => reject(new DOMException('모의 요청 취소', 'AbortError'));
@@ -82,6 +85,21 @@ function enterUrl(app, url = 'https://input.example.test/start?token=private#sec
   scan.shadowRoot.querySelector('form').dispatchEvent(event);
   assert(event.defaultPrevented, '폼 제출의 기본 동작을 차단하지 않았습니다.');
   return url;
+}
+
+function cameraQr(app, value) {
+  const scan = find(app.shadowRoot, 'qr-scan-page');
+  const scanner = scan.shadowRoot.querySelector('qr-camera-scanner');
+  scanner.dispatchEvent(new CustomEvent('qr-detected', {
+    detail: { value, source: 'camera' }, bubbles: true, composed: true,
+  }));
+  return scan;
+}
+
+function deepActiveElement() {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
 }
 
 async function resultPage(app) {
@@ -114,6 +132,61 @@ test('수동 입력 → 로딩 → 정상 결과 → 명시적 클릭으로만 �
   assert(opened.length === 1, '사용자 클릭당 사이트 열기가 한 번이어야 합니다.');
   assert(opened[0][0] === 'https://destination.example.test/checked', '검사된 최종 주소와 열린 주소가 다릅니다.');
   assert(opened[0][2] === 'noopener,noreferrer', '새 창 격리 옵션이 없습니다.');
+});
+
+test('프로토콜 없는 카메라 QR은 HTTPS로 검사하며 수동 입력창을 열거나 포커스를 빼앗지 않음', async ({ app, requests, opened, mock }) => {
+  let requestedUrl;
+  mock((request) => {
+    if (request.method === 'POST') {
+      requestedUrl = request.body.url;
+      return jsonResponse({ scanId: 'ui-scan', status: 'queued', mode: 'sandbox' });
+    }
+    return jsonResponse(scanResponse(requestedUrl));
+  });
+  const scan = find(app.shadowRoot, 'qr-scan-page');
+  const input = scan.shadowRoot.querySelector('input');
+  const manual = scan.shadowRoot.querySelector('.manual-entry');
+  const cameraButton = scan.shadowRoot.querySelector('qr-camera-scanner').shadowRoot.querySelector('button');
+  let inputFocuses = 0;
+  input.addEventListener('focus', () => { inputFocuses += 1; });
+  cameraButton.focus();
+  cameraQr(app, 'www.input.example.test/start');
+  assert(find(app.shadowRoot, 'qr-loading-page'), 'QR 인식 후 로딩으로 진행하지 않았습니다.');
+  assert(!manual.open && inputFocuses === 0, 'QR을 읽은 뒤 수동 입력창으로 포커스를 옮겼습니다.');
+  await resultPage(app);
+  assert(requestedUrl === 'https://www.input.example.test/start', 'QR 주소에 HTTPS를 정확히 보완하지 않았습니다.');
+  assert(requests[0].method === 'POST' && requests[0].body.mode === 'sandbox', '정규화 후 올바른 검사 요청을 보내지 않았습니다.');
+  assert(requests.some((request) => request.method === 'GET'), '생성된 검사 상태를 조회하지 않았습니다.');
+  assert(inputFocuses === 0 && opened.length === 0, '결과 전환 중 수동 입력 포커스 또는 목적지 열기가 발생했습니다.');
+});
+
+test('URL이 아닌 카메라 QR은 촬영 화면에서 오류를 알리고 수동 입력·포커스를 보존', async ({ app, requests, opened }) => {
+  const scan = find(app.shadowRoot, 'qr-scan-page');
+  const scanner = scan.shadowRoot.querySelector('qr-camera-scanner');
+  const input = scan.shadowRoot.querySelector('input');
+  const manual = scan.shadowRoot.querySelector('.manual-entry');
+  input.value = 'previous.example.test/path';
+  const cameraButton = scanner.shadowRoot.querySelector('button');
+  cameraButton.focus();
+  cameraQr(app, 'WIFI:T:WPA;S:demo;P:demo;;');
+  assert(find(app.shadowRoot, 'qr-scan-page') === scan, '잘못된 QR이 검사 화면으로 전환됐습니다.');
+  assert(!manual.open && input.value === 'previous.example.test/path', '카메라 오류가 수동 입력 상태를 변경했습니다.');
+  assert(deepActiveElement() === cameraButton, '카메라 QR 오류로 포커스를 빼앗았습니다.');
+  assert(scanner.shadowRoot.querySelector('.state.error')?.textContent.trim(), '촬영 화면에 QR 오류가 표시되지 않았습니다.');
+  assert(requests.length === 0 && opened.length === 0, '잘못된 QR로 네트워크 요청 또는 목적지 열기가 발생했습니다.');
+});
+
+test('직접 입력한 프로토콜 없는 주소도 HTTPS로 검사하고 잘못된 수동 입력은 해당 입력에 안내', async ({ app, requests, mock }) => {
+  const scan = find(app.shadowRoot, 'qr-scan-page');
+  const input = scan.shadowRoot.querySelector('input');
+  enterUrl(app, 'not a website');
+  assert(scan.shadowRoot.querySelector('.manual-entry').open, '잘못된 수동 입력창이 펼쳐지지 않았습니다.');
+  assert(deepActiveElement() === input && input.getAttribute('aria-invalid') === 'true', '수동 입력 오류의 포커스·필드 표시가 없습니다.');
+  assert(requests.length === 0, '잘못된 수동 입력을 API로 전송했습니다.');
+  mock((request) => jsonResponse(scanResponse(request.body.url)));
+  enterUrl(app, 'input.example.test:8443/path?step=1#done');
+  await resultPage(app);
+  assert(requests.length === 1 && requests[0].body.url === 'https://input.example.test:8443/path?step=1#done', '수동 입력의 HTTPS 보완 또는 경로 보존에 실패했습니다.');
 });
 
 test('피싱 결과는 목적지 진입 없이 신고 건수·이력과 신고 버튼 제공', async ({ app, requests, opened, mock }) => {
@@ -157,13 +230,24 @@ test('알 수 없는 판정은 확인 불가로 처리하고 사이트 접속 �
   assert(opened.length === 0, '알 수 없는 판정에서 사이트를 열었습니다.');
 });
 
-test('미완료 검사 응답은 오류 상태로 남고 접속 제공 안 함', async ({ app, opened, mock }) => {
-  mock((request) => jsonResponse(scanResponse(request.body.url, { status: 'running', verdict: 'clear' })));
+test('진행 중인 검사 응답은 로딩에서 계속 조회하며 접속을 제공하지 않고 취소 가능', async ({ app, requests, opened, mock }) => {
+  let requestedUrl;
+  mock((request) => {
+    if (request.method === 'POST') {
+      requestedUrl = request.body.url;
+      return jsonResponse({ scanId: 'ui-scan', status: 'queued', mode: 'sandbox' });
+    }
+    return jsonResponse(scanResponse(requestedUrl, { status: 'running', verdict: null }));
+  });
   enterUrl(app);
-  await waitUntil(() => find(app.shadowRoot, 'qr-loading-page')?.shadowRoot.querySelector('section.error'));
+  await waitUntil(() => requests.some((request) => request.method === 'GET'));
+  const loading = find(app.shadowRoot, 'qr-loading-page');
+  assert(loading && !loading.shadowRoot.querySelector('section.error'), '진행 중인 작업을 오류로 처리했습니다.');
   noDestinationLinks(app);
   assert(!find(app.shadowRoot, 'qr-result-page'), '미완료 결과를 정상 완료로 표시했습니다.');
   assert(opened.length === 0, '미완료 상태에서 목적지를 열었습니다.');
+  loading.shadowRoot.querySelector('.cancel').click();
+  assert(find(app.shadowRoot, 'qr-scan-page') && requests.every((request) => request.signal.aborted), '진행 중 작업의 클라이언트 조회를 취소하지 못했습니다.');
 });
 
 test('취소 후 늦은 이전 응답은 새 검사의 결과를 덮어쓰지 않음', async ({ app, requests, mock }) => {

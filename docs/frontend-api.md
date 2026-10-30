@@ -2,6 +2,8 @@
 
 프런트엔드는 빌드 없이 정적 서버에서 실행합니다. 기본 동작은 실제 API 모드입니다. 기본 연결 방식은 Python 백엔드(`app/main.py`, API 계약 v0.2)의 `POST /api/scans` + `GET /api/scans/{id}` 폴링입니다. 어댑터(`src/services/response-adapter.js`)가 백엔드의 중첩 보고서를 아래 화면용 모델로 변환합니다. 신고 API는 백엔드에 아직 없습니다. 이 문서의 `/api/analyze`와 신고 경로는 제안 계약이며, 실제 백엔드 계약이 바뀌면 `src/config.js`와 어댑터에서 대응합니다.
 
+QR·수동 입력의 `www.example.test/path` 같은 프로토콜 없는 웹 주소는 입력 단계에서 `https://www.example.test/path`로 정규화한 뒤 API에 보냅니다. 명시한 `http://`는 유지합니다. 이 보완은 사용자 입력에만 적용하며, API 응답의 주소와 실제 접속 목적지는 명시적인 HTTP(S) URL인지 계속 검증합니다. URL이 아닌 QR은 촬영 화면에 오류를 표시하고 수동 입력창으로 포커스를 옮기지 않습니다.
+
 ## 백엔드와 로컬 연결
 
 ```sh
