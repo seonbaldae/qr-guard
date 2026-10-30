@@ -11,6 +11,7 @@ COPY worker.cjs .
 COPY observer.cjs .
 COPY network-analyzer.cjs redirect-analyzer.cjs dom-analyzer.cjs ./
 COPY verdict.cjs .
+COPY destination-policy.cjs .
 
 EXPOSE 4000
 

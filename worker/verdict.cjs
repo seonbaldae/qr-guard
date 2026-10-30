@@ -16,6 +16,16 @@ function decideVerdict({
     };
   }
 
+  const blockedDestination = browserAnalysis?.signals?.find(
+    signal => signal.kind === "blocked_destination"
+  );
+  if (blockedDestination) {
+    return {
+      verdict: "block",
+      reasons: [blockedDestination.summary],
+    };
+  }
+
   if (
     brandAnalysis?.status === "completed" &&
     brandAnalysis.signal === "brand_domain_inconsistency"
@@ -36,7 +46,7 @@ function decideVerdict({
   ];
   for (const [name, status] of required) {
     if (status !== "completed") {
-      reasons.push(`${name}을 완료하지 못했습니다.`);
+      reasons.push(`${name} 단계를 완료하지 못했습니다.`);
     }
   }
 

@@ -32,6 +32,20 @@ test("브랜드와 도메인이 다르면 즉시 차단한다", () => {
   assert.equal(result.verdict, "block");
 });
 
+test("내부망 목적지 요청은 즉시 차단한다", () => {
+  const result = decideVerdict(completed({
+    browserAnalysis: {
+      status: "blocked",
+      signals: [{
+        kind: "blocked_destination",
+        severity: "high",
+        summary: "내부망 요청을 차단했습니다.",
+      }],
+    },
+  }));
+  assert.equal(result.verdict, "block");
+});
+
 test("필수 단계가 실패하거나 실행되지 않으면 unknown이다", () => {
   assert.equal(decideVerdict(completed({
     threatAnalysis: { status: "failed", providers: [] },

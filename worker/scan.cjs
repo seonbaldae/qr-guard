@@ -5,8 +5,22 @@ const { spawnSync } = require("node:child_process");
 const { decideVerdict } = require("./verdict.cjs");
 
 const ROOT = __dirname;
-const BASE = "http://127.0.0.1:4000";
-const TEST_URL = `${BASE}/demo/normal`;
+const WORKER_BASE = process.env.WORKER_BASE || "http://127.0.0.1:4000";
+const DEMO_ORIGIN = "http://127.0.0.1:4000";
+
+function requestedUrl() {
+    const value = process.argv[2] || `${DEMO_ORIGIN}/demo/normal`;
+    let url;
+    try {
+        url = new URL(value);
+    } catch {
+        throw new Error("검사할 URL 형식이 올바르지 않습니다.");
+    }
+    if (!["http:", "https:"].includes(url.protocol)) {
+        throw new Error("HTTP 또는 HTTPS URL만 검사할 수 있습니다.");
+    }
+    return url.href;
+}
 
 async function requestJson(url, options = {}) {
     const response = await fetch(url, {
@@ -15,13 +29,25 @@ async function requestJson(url, options = {}) {
     });
 
     if (!response.ok) {
-        throw new Error(`Worker HTTP ${response.status}: ${await response.text()}`);
+        const text = await response.text();
+        let body;
+        try {
+            body = JSON.parse(text);
+        } catch {
+            body = null;
+        }
+        const error = new Error(`Worker HTTP ${response.status}: ${text}`);
+        error.status = response.status;
+        error.code = body?.error?.code;
+        throw error;
     }
 
     return response.json();
 }
 
 async function main() {
+    const targetUrl = requestedUrl();
+
     // Docker에 연결할 로컬 파일을 먼저 확인합니다.
     for (const file of [
         "run-phishpedia.py",
@@ -39,7 +65,7 @@ async function main() {
 
     const result = {
         scanId,
-        requestedUrl: TEST_URL,
+        requestedUrl: targetUrl,
         executionStatus: "running",
         verdict: "unknown",
         verdictReasons: [],
@@ -52,12 +78,12 @@ async function main() {
     try {
         console.error("[1/3] Worker에 방문·캡처 요청");
 
-        await requestJson(`${BASE}/internal/jobs`, {
+        await requestJson(`${WORKER_BASE}/internal/jobs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 scanId,
-                url: TEST_URL,
+                url: targetUrl,
                 timeoutMs: 30000,
             }),
         });
@@ -66,7 +92,7 @@ async function main() {
         let job;
 
         while (Date.now() < deadline) {
-            job = await requestJson(`${BASE}/internal/jobs/${scanId}`);
+            job = await requestJson(`${WORKER_BASE}/internal/jobs/${scanId}`);
 
             if (["completed", "failed"].includes(job.status)) break;
 
@@ -91,7 +117,7 @@ async function main() {
         console.error("[2/3] 같은 작업의 최종 URL·PNG 저장");
 
         const imageResponse = await fetch(
-            `${BASE}/internal/jobs/${scanId}/screenshot`,
+            `${WORKER_BASE}/internal/jobs/${scanId}/screenshot`,
             { signal: AbortSignal.timeout(10000) }
         );
 
@@ -204,6 +230,17 @@ async function main() {
     } catch (error) {
         result.executionStatus = "failed";
         result.error = { message: error.message };
+
+        if (error.code === "unsafe_target") {
+            result.browserAnalysis = {
+                status: "blocked",
+                signals: [{
+                    kind: "blocked_destination",
+                    severity: "high",
+                    summary: "공개 인터넷이 아닌 목적지 URL을 차단했습니다.",
+                }],
+            };
+        }
 
         if (result.brandAnalysis.status === "running") {
             result.brandAnalysis = {
