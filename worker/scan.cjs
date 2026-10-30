@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const { decideVerdict } = require("./verdict.cjs");
 
 const ROOT = __dirname;
 const BASE = "http://127.0.0.1:4000";
@@ -40,11 +41,10 @@ async function main() {
         scanId,
         requestedUrl: TEST_URL,
         executionStatus: "running",
-        verdict: "review",
-        verdictReasons: [
-            "Safe Browsing은 아직 연결되지 않았습니다.",
-            "URL 정적 분석은 아직 연결되지 않았습니다.",
-        ],
+        verdict: "unknown",
+        verdictReasons: [],
+        staticAnalysis: { status: "not_run", signals: [] },
+        threatAnalysis: { status: "not_run", providers: [] },
         browserAnalysis: { status: "not_run" },
         brandAnalysis: { status: "not_run" },
     };
@@ -212,12 +212,12 @@ async function main() {
             };
         }
 
-        result.verdictReasons.push(
-            "검사 흐름을 완료하지 못했으므로 정상으로 판정하지 않습니다."
-        );
-
         process.exitCode = 1;
     }
+
+    const decision = decideVerdict(result);
+    result.verdict = decision.verdict;
+    result.verdictReasons = decision.reasons;
 
     const output = path.join(directory, "scan-result.json");
 

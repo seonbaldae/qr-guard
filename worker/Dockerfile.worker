@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY worker.cjs .
 COPY observer.cjs .
+COPY verdict.cjs .
 
 EXPOSE 4000
 
