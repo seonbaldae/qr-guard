@@ -127,6 +127,7 @@ test('수동 입력 → 로딩 → 정상 결과 → 명시적 클릭으로만 �
   assert(!button.disabled && button.textContent.includes('사이트 들어가기'), '정상 결과 접속 버튼이 없습니다.');
   assert(opened.length === 0, '결과 진입만으로 목적지를 열었습니다.');
   assert(requests.length === 1 && requests[0].body.url === url, '입력 URL이 검사 요청 본문과 다릅니다.');
+  assert(requests[0].body.source === 'manual', '수동 입력 출처를 서버에 전달하지 않았습니다.');
   assert(!page.shadowRoot.getElementById('requested').textContent.includes('private'), '결과에 URL 토큰을 노출했습니다.');
   button.click();
   assert(opened.length === 1, '사용자 클릭당 사이트 열기가 한 번이어야 합니다.');
@@ -155,7 +156,7 @@ test('프로토콜 없는 카메라 QR은 HTTPS로 검사하며 수동 입력창
   assert(!manual.open && inputFocuses === 0, 'QR을 읽은 뒤 수동 입력창으로 포커스를 옮겼습니다.');
   await resultPage(app);
   assert(requestedUrl === 'https://www.input.example.test/start', 'QR 주소에 HTTPS를 정확히 보완하지 않았습니다.');
-  assert(requests[0].method === 'POST' && requests[0].body.mode === 'sandbox', '정규화 후 올바른 검사 요청을 보내지 않았습니다.');
+  assert(requests[0].method === 'POST' && requests[0].body.mode === 'sandbox' && requests[0].body.source === 'qr', '정규화 후 올바른 검사 요청을 보내지 않았습니다.');
   assert(requests.some((request) => request.method === 'GET'), '생성된 검사 상태를 조회하지 않았습니다.');
   assert(inputFocuses === 0 && opened.length === 0, '결과 전환 중 수동 입력 포커스 또는 목적지 열기가 발생했습니다.');
 });
@@ -197,6 +198,7 @@ test('피싱 결과는 목적지 진입 없이 신고 건수·이력과 신고 �
   const page = await resultPage(app);
   noDestinationLinks(app);
   assert(page.shadowRoot.getElementById('report-count').textContent === '128', '서버 신고 건수가 표시되지 않았습니다.');
+  assert(page.shadowRoot.querySelector('.report-scope').textContent.includes('현재 서버'), '신고 집계 범위가 표시되지 않았습니다.');
   assert(page.shadowRoot.querySelector('.report-history').textContent.includes('이전에 신고'), '신고 이력 안내가 없습니다.');
   const button = page.shadowRoot.querySelector('.main-action');
   assert(!button.disabled, '다른 사람의 신고 이력으로 현재 사용자 신고를 막았습니다.');
@@ -220,6 +222,88 @@ test('신고 실패는 기존 결과·건수를 보존하고 재시도 제공', 
   assert(!button.disabled && button.textContent.includes('다시 시도'), '신고 실패 재시도 동작이 없습니다.');
   assert(page.shadowRoot.getElementById('report-count').textContent === '128', '실패한 신고를 건수에 반영했습니다.');
   noDestinationLinks(app);
+});
+
+test('실제 백엔드 형식의 판정 이유·미방문 사유·신고 집계를 표시', async ({ app, requests, mock }) => {
+  let requestedUrl;
+  mock((request) => {
+    if (request.path.endsWith('/reports')) return jsonResponse({ scanId: 'ui-scan', reportCount: 3, isReported: true, reportedByUser: true });
+    if (request.method === 'POST') {
+      requestedUrl = request.body.url;
+      return jsonResponse({ scanId: 'ui-scan', status: 'queued', mode: 'sandbox' });
+    }
+    return jsonResponse({
+      scanId: 'ui-scan', requestedUrl, status: 'completed', mode: 'sandbox',
+      staticAnalysis: { status: 'completed', signals: [], providers: [], limitations: [] },
+      sandboxAnalysis: { status: 'skipped', skipReason: 'known_malicious', screenshot: { status: 'skipped', available: false }, signals: [], limitations: [] },
+      verdict: { level: 'malicious', reasons: ['위협 목록에서 발견된 주소예요.'], evidenceIds: ['ev-google'], limitations: [] },
+      evidence: [{ id: 'ev-google', kind: 'known_threat_match', source: 'google_safe_browsing', summary: '위협 목록 일치', observedAt: '2026-10-31T01:00:00Z' }],
+      reportCount: 2, isReported: true, reportedByUser: false,
+    });
+  });
+  enterUrl(app);
+  const page = await resultPage(app);
+  assert(page.shadowRoot.querySelector('.decision-reasons').textContent.includes('위협 목록에서 발견된 주소'), '서버 판정 이유가 표시되지 않았습니다.');
+  const reference = page.shadowRoot.querySelector('.references').textContent;
+  assert(reference.includes('위협 목록 일치') && !reference.includes('ev-google'), '판정 근거의 설명 대신 내부 식별자가 노출되었습니다.');
+  assert(page.shadowRoot.querySelector('qr-site-preview').shadowRoot.querySelector('.empty p').textContent.includes('방문하지 않았어요'), '이미지가 없는 이유를 구별하지 않았습니다.');
+  assert(page.shadowRoot.getElementById('report-count').textContent === '2', '서버 신고 집계가 누락되었습니다.');
+  page.shadowRoot.querySelector('.main-action').click();
+  await waitUntil(() => page.shadowRoot.getElementById('report-count').textContent === '3');
+  assert(requests.filter((request) => request.path.endsWith('/reports')).length === 1, '신고 접수 요청이 다릅니다.');
+  noDestinationLinks(app);
+});
+
+test('카메라·수동 입력을 시작하기 전 Google URL 전송을 안내', async ({ app, requests }) => {
+  const scan = find(app.shadowRoot, 'qr-scan-page');
+  const notice = scan.shadowRoot.querySelector('.privacy');
+  assert(notice && notice.textContent.includes('주소가 Google에 전송'), '검사 전 URL 전송 안내가 없습니다.');
+  assert(notice.compareDocumentPosition(scan.shadowRoot.querySelector('qr-camera-scanner')) & Node.DOCUMENT_POSITION_FOLLOWING, '카메라 시작 전 안내를 확인할 수 없습니다.');
+  assert(requests.length === 0, '안내를 표시하는 것만으로 검사 요청이 발생했습니다.');
+});
+
+test('공개 주소 검사 결과는 화면 미확인을 안내하고 원본 주소만 명시적 클릭으로 연다', async ({ app, opened, mock }) => {
+  mock((request) => jsonResponse(scanResponse(request.body.url, {
+    analysisScope: 'static', reportAvailable: false, finalUrl: null, reportCount: null, isReported: null,
+    previewMessage: '사이트 화면 미리보기는 점검 중이에요',
+  })));
+  const url = enterUrl(app, 'https://input.example.test/');
+  const page = await resultPage(app);
+  const verdict = page.shadowRoot.querySelector('qr-verdict-summary');
+  assert(verdict.shadowRoot.querySelector('h2').textContent.includes('주소 검사'), '주소 검사와 화면 검사를 구분하지 않았습니다.');
+  assert(verdict.shadowRoot.querySelector('.copy').textContent.includes('사이트 화면과 최종 목적지는 확인하지 않았어요'), '검사 한계가 결과 앞부분에 없습니다.');
+  assert(page.shadowRoot.getElementById('final').textContent.includes('미확인'), '확인하지 않은 도착 주소를 표시했습니다.');
+  assert(page.shadowRoot.querySelector('qr-site-preview').shadowRoot.querySelector('.empty p').textContent.includes('점검 중'), '미리보기 점검 안내가 없습니다.');
+  assert(opened.length === 0, '결과만으로 원본 사이트를 열었습니다.');
+  page.shadowRoot.querySelector('.main-action').click();
+  assert(opened.length === 1 && opened[0][0] === url, '정적 완료 결과에서 명시한 원본 주소를 열지 않았습니다.');
+});
+
+test('공개 피싱 판정은 신고 준비 중과 미확인 건수를 표시하고 접수·접속하지 않는다', async ({ app, opened, requests, mock }) => {
+  mock((request) => jsonResponse(scanResponse(request.body.url, { verdict: 'phishing', analysisScope: 'static',
+    reportAvailable: false, reportCount: null, isReported: null, finalUrl: null })));
+  enterUrl(app);
+  const page = await resultPage(app);
+  const button = page.shadowRoot.querySelector('.main-action');
+  assert(button.disabled && button.textContent.includes('신고 기능 준비 중'), '신고 미제공 상태에서 접수 버튼을 활성화했습니다.');
+  assert(page.shadowRoot.getElementById('report-count').textContent === '확인 불가', '신고 미제공 건수를 0건으로 표시했습니다.');
+  const before = requests.length;
+  button.click();
+  page.dispatchEvent(new CustomEvent('report-request', { bubbles: true, composed: true }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(requests.length === before, '신고 미제공 상태에서 요청을 보냈습니다.');
+  noDestinationLinks(app);
+  assert(opened.length === 0, '피싱 결과에서 목적지를 열었습니다.');
+});
+
+test('주소 검사 로딩은 화면 미확인 범위를 안내한다', async ({ app, mock }) => {
+  mock(() => new Promise(() => {}));
+  enterUrl(app);
+  const loading = find(app.shadowRoot, 'qr-loading-page');
+  loading.analysisScope = 'static';
+  assert(!loading.shadowRoot.querySelector('.scope').hidden, '주소 검사 범위가 숨겨져 있습니다.');
+  assert(loading.shadowRoot.querySelector('h1').textContent.includes('주소를 검사'), '주소 검사 제목이 구분되지 않았습니다.');
+  loading.shadowRoot.querySelector('.cancel').click();
 });
 
 test('알 수 없는 판정은 확인 불가로 처리하고 사이트 접속 제공 안 함', async ({ app, opened, mock }) => {

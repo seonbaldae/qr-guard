@@ -12,7 +12,7 @@ import pytest
 
 from app.config import Settings
 from app.main import create_app
-from .support import fake_google, google_result
+from .support import fake_google, google_result, jobs_worker_from_result
 
 
 def worker_payload(**changes):
@@ -31,7 +31,7 @@ def worker_payload(**changes):
 def scan(settings, handler, body=None, *, threat_check=None):
     async def run():
         app = create_app(
-            settings, worker_transport=httpx.MockTransport(handler),
+            settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(handler)),
             threat_check=threat_check or fake_google(["https://listed.example.test/"]),
         )
         async with httpx.AsyncClient(
@@ -120,7 +120,7 @@ def test_plain_login_alone_is_not_suspicious(tmp_path):
         200, json=worker_payload(passwordFieldCount=1, sensitiveFieldTypes=["password"]),
     ))
     assert report["verdict"]["level"] == "no_known_threat"
-    assert {e["kind"] for e in report["evidence"]} == {"password_field"}
+    assert "password_field" in {e["kind"] for e in report["evidence"]}
 
 
 @pytest.mark.parametrize("reason, marker", [

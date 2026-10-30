@@ -118,9 +118,11 @@ class ScanService:
             )
             return
         self.screenshots[report.scan_id] = png
+        report.evidence.extend(result.evidence)
         report.sandbox_analysis = SandboxResult(
             status="completed", final_url=result.final_url, http_status=result.http_status,
             screenshot=ScreenshotState(status="ready", available=True, captured_at=utcnow()),
+            signals=result.signals,
             limitations=["폼 제출과 실제 정보 유출은 검사하지 않았습니다.", *result.limitations],
         )
         assert report.static_analysis is not None
@@ -169,7 +171,7 @@ class ScanService:
             )
             return
         complete = (provider.status == "checked" and final_provider.status == "checked"
-                    and not result.limitations
+                    and result.inspection_complete
                     and (request.expected_brand is None or official is not None))
         report.verdict = VerdictResult(
             level="no_known_threat" if complete else "unknown",

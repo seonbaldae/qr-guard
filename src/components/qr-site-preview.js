@@ -20,8 +20,9 @@ export class QrSitePreview extends HTMLElement {
   set result(value) {
     this.cleanup();const generation=this._generation;
     const image=this.shadowRoot.querySelector('img'); image.removeAttribute('src'); image.hidden=true;
+    this.shadowRoot.querySelector('.caption').hidden=true;
     this.shadowRoot.querySelector('.empty').hidden=false;
-    this.shadowRoot.querySelector('.empty p').textContent=value?.previewUrl?'미리보기를 불러오고 있어요':'미리보기가 없어요';
+    this.shadowRoot.querySelector('.empty p').textContent=value?.previewUrl?'미리보기를 불러오고 있어요':(value?.previewMessage||'미리보기가 없어요');
     if(value?.previewUrl) {
       const controller=new AbortController();this._controller=controller;
       loadPreviewImage(value.previewUrl,{signal:controller.signal,demo:value.demo}).then(blob=>{
@@ -29,11 +30,13 @@ export class QrSitePreview extends HTMLElement {
         this._objectUrl=URL.createObjectURL(blob);
         image.alt=value.demo?'데모용으로 제작한 사이트 미리보기 이미지':'격리 환경에서 촬영한 사이트의 정적 미리보기';
         image.src=this._objectUrl;image.hidden=false;this.shadowRoot.querySelector('.empty').hidden=true;
+        this.shadowRoot.querySelector('.caption').hidden=false;
       }).catch(()=>{if(generation===this._generation&&!controller.signal.aborted)this.showError();});
     }
     this.shadowRoot.querySelector('.caption').textContent=value?.demo?'테스트용 이미지예요':'격리 환경에서 촬영한 이미지예요';
   }
   showError() {
+    this.shadowRoot.querySelector('.caption').hidden=true;
     this.shadowRoot.querySelector('img').hidden=true;this.shadowRoot.querySelector('.empty').hidden=false;
     this.shadowRoot.querySelector('.empty p').textContent='미리보기를 불러오지 못했어요';
   }

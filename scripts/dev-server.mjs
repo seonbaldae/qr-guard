@@ -9,6 +9,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const staticRoot = process.argv.includes('--public') ? join(root, 'dist') : root;
 const port = Number(process.env.PORT || 8080);
 const backend = new URL(process.env.QR_GUARD_API || 'http://127.0.0.1:8000');
 const served = ['index.html', 'src', 'assets', join('tests', 'frontend')];
@@ -19,15 +20,15 @@ const types = {
 
 function staticPath(pathname) {
   const relative = normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)).replace(/^[/\\]+/, '');
-  const target = resolve(root, relative);
-  const allowed = served.some((entry) => target === join(root, entry) || target.startsWith(join(root, entry) + sep));
+  const target = resolve(staticRoot, relative);
+  const allowed = served.some((entry) => target === join(staticRoot, entry) || target.startsWith(join(staticRoot, entry) + sep));
   return allowed ? target : null;
 }
 
 function proxy(req, res) {
   const upstream = request({
     hostname: backend.hostname, port: backend.port, path: req.url, method: req.method,
-    headers: { ...req.headers, host: backend.host },
+    headers: { ...req.headers, host: req.headers.host || backend.host },
   }, (response) => {
     res.writeHead(response.statusCode, response.headers);
     response.pipe(res);

@@ -1,14 +1,30 @@
-# CLI uploads contain only the frontend and its static packaging script.
+# Upload public frontend and only the stateless Python API's source closure.
 /*
 !index.html
-!src/
-!assets/
-!scripts/
+!src
+!assets
+!api
+/api/*
+!/api/analyze.py
+!/api/health.py
+!/api/capabilities.py
+!app
+/app/*
+!/app/__init__.py
+!/app/public_api.py
+!/app/config.py
+!/app/models.py
+!/app/static_adapter.py
+!/app/precheck
+!requirements.txt
+!.python-version
+!scripts
 /scripts/*
 !/scripts/prepare-vercel.mjs
 !vercel.json
 
 # Do not upload hidden files, credentials, or local generated files.
 **/.*
+!/.python-version
 dist/
 node_modules/

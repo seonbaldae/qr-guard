@@ -47,6 +47,38 @@ const BACKEND_VERDICTS = new Map([
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const listOf = (value) => (Array.isArray(value) ? value : []);
 
+const WORKER_ERRORS = new Map([
+  ['worker_not_configured', '격리 브라우저가 아직 연결되지 않았습니다.'],
+  ['worker_egress_unverified', '격리 환경의 네트워크 검증이 완료되지 않아 방문하지 않았습니다.'],
+  ['target_not_allowed', '이 주소는 격리 미리보기 허용 대상이 아닙니다.'],
+  ['worker_blocked', '격리 브라우저의 접근 정책으로 방문이 차단되었습니다.'],
+  ['worker_destination_not_allowed', '허용되지 않은 주소로 이동하여 방문을 중단했습니다.'],
+  ['worker_timeout', '제한 시간 안에 사이트 화면을 확인하지 못했습니다.'],
+  ['worker_unreachable', '격리 브라우저에 연결하지 못했습니다.'],
+  ['worker_navigation_incomplete', '사이트의 최종 도착 주소를 확인하지 못했습니다.'],
+  ['worker_navigation_failed', '사이트가 오류를 반환하여 화면을 확인하지 못했습니다.'],
+  ['invalid_screenshot', '촬영된 미리보기 이미지의 형식을 확인하지 못했습니다.'],
+  ['worker_invalid_response', '격리 브라우저의 응답을 확인하지 못했습니다.'],
+  ['worker_http_error', '격리 브라우저가 검사를 완료하지 못했습니다.'],
+  ['worker_response_too_large', '격리 브라우저의 응답 크기가 허용 범위를 초과했습니다.'],
+  ['worker_scan_mismatch', '격리 브라우저의 응답이 현재 검사와 일치하지 않습니다.'],
+  ['worker_job_failed', '격리 브라우저에서 검사가 실패하거나 중단되었습니다.'],
+  ['worker_screenshot_unavailable', '격리 브라우저가 미리보기 이미지를 제공하지 못했습니다.'],
+  ['invalid_scan_id', '격리 검사 식별자를 확인하지 못했습니다.'],
+  ['analysis_error', '격리 브라우저 결과를 처리하지 못했습니다.'],
+]);
+
+function previewMessage(sandbox, screenshot) {
+  if (sandbox.skipReason === 'known_malicious') return '알려진 위협이 발견되어 사이트를 방문하지 않았어요';
+  if (sandbox.skipReason === 'static_only') return '이번 검사는 사이트 화면을 촬영하지 않았어요';
+  const error = WORKER_ERRORS.get(screenshot.errorCode) || WORKER_ERRORS.get(sandbox.errorCode);
+  if (error) return error;
+  if (screenshot.status === 'expired') return '미리보기 보관 기간이 지났어요. 다시 검사해 주세요';
+  if (screenshot.status === 'failed' || sandbox.status === 'failed') return '사이트 화면을 촬영하지 못했어요';
+  if (sandbox.status === 'blocked') return '접근 정책으로 사이트를 방문하지 않았어요';
+  return '미리보기가 없어요';
+}
+
 // The Python backend (API contract v0.2) nests its report under staticAnalysis, sandboxAnalysis and
 // verdict.level. Flatten it into the shape validated below. Flat responses pass through unchanged.
 function flattenBackendReport(raw) {
@@ -68,10 +100,21 @@ function flattenBackendReport(raw) {
     screenshotUrl: scanId && screenshot.status === 'ready' && screenshot.available === true
       ? `/api/scans/${scanId}/screenshot` : null,
     signals: [...listOf(staticPart.signals), ...listOf(sandbox.signals)],
+    reasons: verdictPart?.reasons,
+    verdictEvidenceIds: verdictPart?.evidenceIds,
     evidence: raw.evidence,
+    reportCount: raw.reportCount,
+    isReported: raw.isReported,
+    reportedByUser: raw.reportedByUser,
+    reportAvailable: raw.reportAvailable,
+    analysisScope: raw.analysisScope === 'static' || raw.mode === 'static' ? 'static' : 'sandbox',
+    previewMessage: raw.analysisScope === 'static' && sandbox.skipReason !== 'known_malicious'
+      ? '사이트 화면 미리보기는 점검 중이에요' : previewMessage(sandbox, screenshot),
+    previewStatus: screenshot.status,
     providers: staticPart.providers,
     limitations: [...new Set([
       ...listOf(staticPart.limitations), ...listOf(sandbox.limitations), ...listOf(verdictPart?.limitations),
+      ...(WORKER_ERRORS.has(sandbox.errorCode) ? [WORKER_ERRORS.get(sandbox.errorCode)] : []),
     ])],
     checkedAt: raw.updatedAt,
   };
@@ -82,6 +125,7 @@ export function normalizeScanResponse(raw, expectedUrl, { demo = false } = {}) {
     throw new ServiceError('검사 응답 형식이 올바르지 않습니다.', 'invalid_response');
   }
   raw = flattenBackendReport(raw);
+  const analysisScope = raw.analysisScope === 'static' ? 'static' : raw.analysisScope === 'sandbox' ? 'sandbox' : null;
   const requestedUrl = validateUrl(expectedUrl);
   try {
     if (validateUrl(raw.requestedUrl) !== requestedUrl) throw new Error();
@@ -104,6 +148,8 @@ export function normalizeScanResponse(raw, expectedUrl, { demo = false } = {}) {
     }
   }
   if (status !== 'completed') finalUrl = null;
+  // A URL-only analysis cannot establish a visited destination or screenshot.
+  if (analysisScope === 'static') finalUrl = null;
   if (!limitations.length) limitations.push('이번 검사 결과만으로 사이트의 완전한 안전이나 공식 운영 여부를 보증하지 않습니다.');
   const signals = Array.isArray(raw.signals) ? raw.signals.slice(0, 30).flatMap((item) => {
     if (!item || typeof item !== 'object' || typeof item.summary !== 'string') return [];
@@ -138,7 +184,13 @@ export function normalizeScanResponse(raw, expectedUrl, { demo = false } = {}) {
     finalUrl,
     status,
     verdict,
-    previewUrl: previewUrl(raw.screenshotUrl, { demo }),
+    analysisScope,
+    reportAvailable: raw.reportAvailable === undefined ? true : raw.reportAvailable === true,
+    reasons: listOf(raw.reasons).filter((item) => typeof item === 'string' && item.trim()).slice(0, 20).map((item) => plainText(item)),
+    verdictEvidenceIds: listOf(raw.verdictEvidenceIds).filter((id) => safeScanId(id)).slice(0, 50),
+    previewUrl: analysisScope === 'static' ? null : previewUrl(raw.screenshotUrl, { demo }),
+    previewMessage: plainText(raw.previewMessage) || '미리보기가 없어요',
+    previewStatus: ['not_requested', 'pending', 'ready', 'failed', 'skipped', 'expired', 'cancelled'].includes(raw.previewStatus) ? raw.previewStatus : null,
     reportCount: safeCount(raw.reportCount),
     isReported: typeof raw.isReported === 'boolean' ? raw.isReported : null,
     reportedByUser: raw.reportedByUser === true,

@@ -11,6 +11,7 @@ export class QrLoadingPage extends HTMLElement {
       .host { font-size:17px; color:#4e5968; overflow-wrap:anywhere; }
       .status { margin:10px 0 0; color:#8b95a1; font-size:14px; }
       .status:empty { display:none; }
+      .scope { margin-top:14px; color:#6b7684; font-size:14px; line-height:1.6; word-break:keep-all; }
       .note { display:none; font-size:14px; color:#6b7684; margin-top:14px; }
       .actions { margin-top:auto; padding-top:56px; display:grid; gap:10px; }
       .actions .button { width:100%; min-height:56px; border-radius:16px; font-size:17px; }
@@ -18,11 +19,15 @@ export class QrLoadingPage extends HTMLElement {
       .error .spinner::after { content:'!'; color:#f04452; position:absolute; inset:0; display:grid; place-items:center; font-size:27px; font-weight:700; }
       .error .note { display:block; }
       @keyframes rotate { to { transform:rotate(360deg); } }
-    </style><section aria-labelledby="loading-title" aria-busy="true"><div class="spinner" aria-hidden="true"></div><h1 id="loading-title" tabindex="-1">사이트를 검사하고 있어요</h1><p class="host"></p><p class="status" role="status"></p><p class="note"></p><div class="actions"><button class="button primary retry" hidden>다시 검사</button><button class="button secondary cancel">검사 취소</button></div></section>`;
+    </style><section aria-labelledby="loading-title" aria-busy="true"><div class="spinner" aria-hidden="true"></div><h1 id="loading-title" tabindex="-1">사이트를 검사하고 있어요</h1><p class="host"></p><p class="status" role="status"></p><p class="scope" hidden>지금은 주소만 검사해요. 사이트 화면은 확인하지 않아요.</p><p class="note"></p><div class="actions"><button class="button primary retry" hidden>다시 검사</button><button class="button secondary cancel">검사 취소</button></div></section>`;
     this.shadowRoot.querySelector('.cancel').addEventListener('click',()=>this.dispatchEvent(new CustomEvent('scan-cancel',{bubbles:true,composed:true})));
     this.shadowRoot.querySelector('.retry').addEventListener('click',()=>this.dispatchEvent(new CustomEvent('scan-retry',{bubbles:true,composed:true})));
   }
   set url(value) { this.shadowRoot.querySelector('.host').textContent=getHostname(value); }
+  set analysisScope(value) {
+    this.shadowRoot.querySelector('.scope').hidden=value!=='static';
+    this.shadowRoot.querySelector('h1').textContent=value==='static'?'주소를 검사하고 있어요':'사이트를 검사하고 있어요';
+  }
   set progress(value) {
     if(value?.message) this.shadowRoot.querySelector('.status').textContent=value.message===this.shadowRoot.querySelector('h1').textContent?'':value.message;
   }

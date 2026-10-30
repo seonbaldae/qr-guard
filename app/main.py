@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from app.config import Settings, configured_origin
-from app.models import ScanAccepted, ScanReport, ScanRequest
+from app.models import ReportReceipt, ReportRequest, ScanAccepted, ScanReport, ScanRequest
+from app.reporting import ReportStore
 from app.service import ScanCapacityError, ScanService
 from app.static_adapter import ThreatCheck
 
@@ -25,6 +26,8 @@ def create_app(
     )
     service = ScanService(settings, worker_transport, threat_check)
     application.state.scans = service
+    reports = ReportStore()
+    application.state.report_receipts = reports
 
     @application.middleware("http")
     async def private_responses(request, call_next):
@@ -59,7 +62,19 @@ def create_app(
     async def get_scan(scan_id: str):
         if scan_id not in service.reports:
             raise HTTPException(status_code=404, detail="Scan not found")
-        return service.reports[scan_id]
+        return reports.decorate(service.reports[scan_id])
+
+    @application.post("/api/scans/{scan_id}/reports", response_model=ReportReceipt)
+    async def report_site(scan_id: str, request: ReportRequest):
+        if request.scan_id != scan_id:
+            raise HTTPException(status_code=422, detail="Scan identifiers do not match")
+        report = service.reports.get(scan_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        if (report.status != "completed" or report.verdict is None
+                or report.verdict.level != "malicious"):
+            raise HTTPException(status_code=409, detail="Only completed malicious scans can be reported")
+        return reports.accept(report)
 
     @application.get("/api/scans/{scan_id}/screenshot")
     async def get_screenshot(scan_id: str):

@@ -8,7 +8,7 @@ from io import BytesIO
 import httpx
 from PIL import Image
 
-from .support import fake_google
+from .support import fake_google, jobs_worker_from_result
 
 
 def run_api(app, scenario):
@@ -99,7 +99,7 @@ def test_f2_worker_contract_returns_png_and_no_known_threat():
 
     def worker(request):
         import json
-        assert str(request.url) == "http://worker:8001/internal/analyze"
+        assert str(request.url) == "http://worker:8001/internal/jobs"
         body = json.loads(request.content)
         assert set(body) == {"scanId", "url", "timeoutMs"}
         assert body["url"] == "https://demo.example.test/"
@@ -131,7 +131,7 @@ def test_f2_worker_contract_returns_png_and_no_known_threat():
         worker_url="http://worker:8001",
         demo_origins=("https://demo.example.test",), worker_egress_verified=True,
     )
-    run_api(create_app(settings, worker_transport=httpx.MockTransport(worker), threat_check=fake_google()), scenario)
+    run_api(create_app(settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(worker)), threat_check=fake_google()), scenario)
 
 
 def test_password_and_expected_brand_mismatch_are_suspicious():
@@ -163,4 +163,4 @@ def test_password_and_expected_brand_mismatch_are_suspicious():
         worker_url="http://worker:8001", demo_origins=("https://demo.example.test",),
         worker_egress_verified=True,
     )
-    run_api(create_app(settings, worker_transport=httpx.MockTransport(worker)), scenario)
+    run_api(create_app(settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(worker))), scenario)

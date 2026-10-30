@@ -7,6 +7,9 @@ export async function reportSite(result, { signal } = {}) {
   if (!result || result.verdict !== 'phishing') {
     throw new ServiceError('신고할 수 있는 피싱 검사 결과가 없습니다.', 'invalid_result');
   }
+  if (result.reportAvailable === false) {
+    throw new ServiceError('신고 기능을 준비하고 있습니다. 잠시 후 다시 확인해 주세요.', 'report_unavailable');
+  }
   const scanId = safeScanId(result.scanId);
   if (!scanId) throw new ServiceError('신고 API에 필요한 검사 식별자가 없습니다.', 'invalid_result');
   const scope = createRequestScope(signal);

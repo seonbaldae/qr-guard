@@ -1,8 +1,11 @@
-import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Packaging only: no dependency installation, compilation, or server code.
+// Packages public assets only. The Python function is built separately by Vercel.
+const flags = process.argv.slice(2);
+if (flags.some(flag => flag !== '--public')) throw new Error('Unsupported packaging option.');
+const publicDeployment = flags.includes('--public');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = join(root, 'dist');
 const sources = new Map([
@@ -51,5 +54,10 @@ await copyFile(join(root, 'index.html'), join(output, 'index.html'));
 copied += 1;
 for (const [directory, extensions] of sources) {
   await copyStaticDirectory(directory, extensions);
+}
+if (publicDeployment) {
+  await writeFile(join(output, 'src', 'deployment-config.js'),
+    "// Public configuration only. Server credentials never enter this file.\n" +
+    "export const deploymentConfig = Object.freeze({ scanTransport: 'direct', scanMode: 'static' });\n");
 }
 process.stdout.write(`Prepared ${copied} frontend files in dist/.\n`);

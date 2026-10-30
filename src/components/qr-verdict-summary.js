@@ -24,7 +24,8 @@ export class QrVerdictSummary extends HTMLElement {
     const verdict=labels[value?.verdict]?value.verdict:'inconclusive'; const text=labels[verdict];
     this.shadowRoot.querySelector('section').className=`summary ${verdict}`;
     this.shadowRoot.querySelector('.mark').innerHTML=icon(text.icon,31);
-    this.shadowRoot.querySelector('h2').textContent=text.title;
-    this.shadowRoot.querySelector('.copy').textContent=text.copy;
+    const addressOnly=value?.analysisScope==='static'&&verdict==='clear';
+    this.shadowRoot.querySelector('h2').textContent=addressOnly?'주소 검사에서 위협 미탐지':text.title;
+    this.shadowRoot.querySelector('.copy').textContent=addressOnly?'사이트 화면과 최종 목적지는 확인하지 않았어요. 주소를 확인한 뒤 이동해 주세요.':text.copy;
   }
 }

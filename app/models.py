@@ -35,6 +35,17 @@ class ScanAccepted(WireModel):
     mode: Mode
 
 
+class ReportRequest(WireModel):
+    scan_id: StrictStr = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class ReportReceipt(WireModel):
+    scan_id: str
+    report_count: int = Field(ge=0)
+    is_reported: bool
+    reported_by_user: bool
+
+
 class Evidence(WireModel):
     id: str
     kind: str
@@ -104,3 +115,6 @@ class ScanReport(WireModel):
     evidence: list[Evidence] = Field(default_factory=list)
     verdict: VerdictResult | None = None
     updated_at: datetime
+    report_count: int = Field(default=0, ge=0)
+    is_reported: bool = False
+    reported_by_user: bool = False

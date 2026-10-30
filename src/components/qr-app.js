@@ -3,24 +3,25 @@ import { validateUrl } from '../utils/url.js';
 import { analyzeUrl } from '../services/scan-api.js';
 import { reportSite } from '../services/report-api.js';
 import { demoUrls } from '../data/demo-fixtures.js';
+import { frontendConfig } from '../config.js';
 
 export class QrApp extends HTMLElement {
   constructor() {
     super();this.attachShadow({mode:'open'});
-    this._generation=0;this._depth='scan';this._mode='live';this._scenario='clear';this._url=null;this._result=null;
+    this._generation=0;this._depth='scan';this._mode='live';this._source='qr';this._scenario='clear';this._url=null;this._result=null;
     this.shadowRoot.innerHTML=`<style>${sharedStyles}
       :host { min-height:100svh; display:block; background:#fff; }
       main { width:100%; max-width:480px; min-height:100svh; margin:0 auto; padding:max(36px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom)); }
       .demo-banner { margin:0 0 22px; color:#8b95a1; font-size:12px; line-height:1.5; }
     </style><main id="main"><p class="demo-banner" role="status" hidden>데모 응답 · 실제 검사 아님</p><div id="page"></div></main>`;
-    this.shadowRoot.addEventListener('scan-request',event=>this.startScan(event.detail.url,'live'));
+    this.shadowRoot.addEventListener('scan-request',event=>this.startScan(event.detail.url,'live','clear',event.detail.source==='manual'?'manual':'qr'));
     this.shadowRoot.addEventListener('demo-request',event=>{
       const scenario=event.detail.scenario;
       this.startScan(['phishing','report-error'].includes(scenario)?demoUrls.phishing:demoUrls.clear,'demo',scenario);
     });
     this.shadowRoot.addEventListener('scan-cancel',()=>this.reset());
     this.shadowRoot.addEventListener('rescan-request',()=>this.reset());
-    this.shadowRoot.addEventListener('scan-retry',()=>{if(this._url)this.startScan(this._url,this._mode,this._scenario);});
+    this.shadowRoot.addEventListener('scan-retry',()=>{if(this._url)this.startScan(this._url,this._mode,this._scenario,this._source);});
     this.shadowRoot.addEventListener('report-request',()=>this.report());
     this.shadowRoot.addEventListener('open-site-request',()=>this.openSite());
     this._onPopState=()=>this.reset(false);
@@ -34,7 +35,7 @@ export class QrApp extends HTMLElement {
   }
   abort() { this._generation+=1;this._scanController?.abort();this._reportController?.abort();this._reportBusy=false; }
   reset(writeHistory=true) {
-    this.abort();this._depth='scan';this._mode='live';this._url=null;this._result=null;this._scenario='clear';
+    this.abort();this._depth='scan';this._mode='live';this._source='qr';this._url=null;this._result=null;this._scenario='clear';
     if(writeHistory) history.replaceState({qrGuardDepth:'scan'},'',location.href);
     this.showPage('qr-scan-page');
   }
@@ -46,19 +47,19 @@ export class QrApp extends HTMLElement {
     this._hasShownPage=true;
     return page;
   }
-  async startScan(raw,mode='live',scenario='clear') {
+  async startScan(raw,mode='live',scenario='clear',source='qr') {
     let url;
     try { url=validateUrl(raw); } catch { return; }
     if(this._depth==='loading'&&this._scanController&&!this._scanController.signal.aborted&&!this._scanFailed)return;
     const previousDepth=this._depth;this.abort();
     const generation=this._generation;
-    this._url=url;this._mode=mode;this._scenario=scenario;this._result=null;this._scanFailed=false;this._depth='loading';
+    this._url=url;this._mode=mode;this._source=source;this._scenario=scenario;this._result=null;this._scanFailed=false;this._depth='loading';
     if(previousDepth==='scan') history.pushState({qrGuardDepth:'loading'},'',location.href);
     else history.replaceState({qrGuardDepth:'loading'},'',location.href);
-    const page=this.showPage('qr-loading-page');page.url=url;
+    const page=this.showPage('qr-loading-page');page.url=url;page.analysisScope=mode==='live'?frontendConfig.scanMode:null;
     const controller=new AbortController();this._scanController=controller;
     try {
-      const result=await analyzeUrl(url,{signal:controller.signal,mode,scenario,onProgress:progress=>{if(generation===this._generation)page.progress=progress;}});
+      const result=await analyzeUrl(url,{signal:controller.signal,mode,source,scenario,onProgress:progress=>{if(generation===this._generation)page.progress=progress;}});
       if(generation!==this._generation||!this.isConnected)return;
       this._result=result;this._depth='result';history.replaceState({qrGuardDepth:'result'},'',location.href);
       const resultPage=this.showPage('qr-result-page');resultPage.result=result;
@@ -68,7 +69,7 @@ export class QrApp extends HTMLElement {
     } finally { if(generation===this._generation)this._scanController=null; }
   }
   async report() {
-    const result=this._result;if(this._depth!=='result'||result?.verdict!=='phishing'||result.reportedByUser||this._reportBusy)return;
+    const result=this._result;if(this._depth!=='result'||result?.verdict!=='phishing'||result.reportAvailable===false||result.reportedByUser||this._reportBusy)return;
     this._reportBusy=true;const generation=this._generation;const controller=new AbortController();this._reportController=controller;
     const page=this.shadowRoot.querySelector('qr-result-page');page.updateReport({...result,busy:true});
     try {

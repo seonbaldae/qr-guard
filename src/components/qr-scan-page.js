@@ -1,5 +1,6 @@
 import { sharedStyles } from '../styles/shared-styles.js';
 import { normalizeInputUrl } from '../utils/url.js';
+import { frontendConfig } from '../config.js';
 
 export class QrScanPage extends HTMLElement {
   constructor() {
@@ -8,6 +9,8 @@ export class QrScanPage extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>${sharedStyles}
       h1 { font-size:28px; font-weight:700; line-height:1.4; letter-spacing:-.8px; }
       .instruction { margin-top:12px; color:var(--qr-muted); font-size:15px; line-height:1.6; word-break:keep-all; }
+      .privacy { margin-top:12px; color:#8b95a1; font-size:12px; line-height:1.6; word-break:keep-all; }
+      .scope { margin-top:12px; color:#6b7684; font-size:13px; line-height:1.6; word-break:keep-all; }
       qr-camera-scanner { margin-top:32px; }
       details { margin-top:12px; }
       summary { list-style:none; display:flex; align-items:center; justify-content:center; min-height:48px; cursor:pointer; color:#6b7684; font-size:14px; border-radius:12px; }
@@ -33,6 +36,8 @@ export class QrScanPage extends HTMLElement {
     <section aria-labelledby="scan-title">
       <h1 id="scan-title" tabindex="-1">QR 코드를<br>스캔해 주세요</h1>
       <p class="instruction">사각형 안에 QR 코드를 맞춰주세요</p>
+      <p class="scope" hidden>지금은 주소만 검사해요. 사이트 화면은 확인하지 않아요.</p>
+      <p class="privacy">위험 확인을 위해 검사할 주소가 Google에 전송돼요.</p>
       <qr-camera-scanner></qr-camera-scanner>
       <details class="manual-entry">
         <summary>주소 직접 입력</summary>
@@ -49,6 +54,7 @@ export class QrScanPage extends HTMLElement {
         <details class="other-samples"><summary>다른 상황 보기</summary><div class="samples"><button data-demo="suspicious">사칭 의심</button><button data-demo="inconclusive">확인 불가</button><button data-demo="error">검사 오류</button><button data-demo="no-preview">미리보기 없음</button><button data-demo="report-error">신고 실패</button></div></details>
       </details>
     </section>`;
+    this.shadowRoot.querySelector('.scope').hidden=frontendConfig.scanMode!=='static';
     this.shadowRoot.querySelector('form').addEventListener('submit', event => {
       event.preventDefault();
       this.submitUrl(this.shadowRoot.querySelector('input').value, 'manual');

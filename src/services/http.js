@@ -83,10 +83,15 @@ export async function requestJson(path, { body, signal, method = 'GET' } = {}) {
     throw new ServiceError('검사 서버에 연결할 수 없습니다. 연결 상태와 API 설정을 확인해 주세요.', 'network');
   }
   if (!response.ok) {
+    const messages = new Map([
+      [422, '검사할 주소의 형식을 확인해 주세요.'],
+      [429, '검사 요청이 많습니다. 잠시 후 다시 시도해 주세요.'],
+      [503, '검사 서버가 준비되지 않았거나 처리할 수 있는 검사 수를 초과했습니다. 잠시 후 다시 시도해 주세요.'],
+    ]);
     throw new ServiceError(
       [404, 405, 501].includes(response.status)
         ? '검사 API가 연결되지 않았습니다. 데모 체험을 이용하거나 서버 연결을 확인해 주세요.'
-        : '서버가 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+        : messages.get(response.status) || '서버가 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
       'http',
     );
   }

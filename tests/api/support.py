@@ -30,3 +30,46 @@ def google_result(matched=False, status: ProviderStatus = "checked"):
 def fake_google(matched_urls=(), status: ProviderStatus = "checked"):
     matches = {normalize(url) for url in matched_urls}
     return lambda url: google_result(normalize(url) in matches, status)
+
+
+def jobs_worker_from_result(handler):
+    """Use existing bounded result fixtures through the actual jobs/PNG wire API."""
+    import base64
+    import json
+    import httpx
+
+    results = {}
+
+    def transport(request):
+        if request.method == "POST" and request.url.path == "/internal/jobs":
+            response = handler(request)
+            if response.status_code != 200:
+                return response
+            try:
+                result = response.json()
+                scan_id = json.loads(request.content)["scanId"]
+            except (ValueError, KeyError):
+                return response
+            results[scan_id] = result
+            return httpx.Response(202, json={"scanId": scan_id, "status": "queued"})
+        scan_id = request.url.path.split("/")[3]
+        result = results[scan_id]
+        if request.url.path.endswith("/screenshot"):
+            try:
+                image = base64.b64decode(result["screenshotBase64"], validate=True)
+            except (ValueError, KeyError):
+                image = b"invalid PNG fixture"
+            return httpx.Response(200, headers={"content-type": "image/png"}, content=image)
+        return httpx.Response(200, json={
+            "scanId": scan_id, "status": "completed", "finalUrl": result["finalUrl"],
+            "httpStatus": result["httpStatus"], "screenshotStatus": "ready",
+            "domAnalysis": {key: result[key] for key in (
+                "pageTitle", "passwordFieldCount", "sensitiveFieldTypes", "forms",
+            )},
+            "networkAnalysis": {"requestHosts": result["requestHosts"], "requestCount": 1,
+                                "blockedRequestCount": 0},
+            "redirectAnalysis": {"finalUrl": result["finalUrl"], "redirected": result["redirected"],
+                                 "redirectChain": []},
+            "limitations": result["limitations"],
+        })
+    return transport

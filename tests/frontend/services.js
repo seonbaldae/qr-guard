@@ -206,7 +206,7 @@ export async function runServiceTests() {
       assert(options.redirect === 'error' && !endpoint.includes('example.test'));
       if (options.method === 'POST') {
         const body = JSON.parse(options.body);
-        assert(body.url === TEST_URL && body.mode === 'sandbox');
+        assert(body.url === TEST_URL && body.mode === 'sandbox' && body.source === 'qr');
         return new Response(JSON.stringify({ scanId: 'test-123', status: 'queued', mode: 'sandbox' }), { status: 202 });
       }
       return new Response(JSON.stringify(response()), { status: 200 });
@@ -214,6 +214,17 @@ export async function runServiceTests() {
       const result = await analyzeUrl(TEST_URL);
       assert(result.verdict === 'clear' && !result.demo);
       assert(calls.join() === 'POST /api/scans,GET /api/scans/test-123');
+    });
+  });
+  await test('수동 입력 출처를 작업 생성 본문에 유지한다', async () => {
+    await withFetch(async (_endpoint, options) => {
+      if (options.method === 'POST') {
+        assert(JSON.parse(options.body).source === 'manual');
+        return new Response(JSON.stringify({ scanId: 'test-123', status: 'queued', mode: 'sandbox' }), { status: 202 });
+      }
+      return new Response(JSON.stringify(backendReport()));
+    }, async () => {
+      await analyzeUrl(TEST_URL, { source: 'manual' });
     });
   });
   await test('백엔드의 queued·running 상태를 기다렸다가 완료 보고서를 화면용 모델로 변환한다', async () => {
@@ -269,8 +280,51 @@ export async function runServiceTests() {
       assert(normalizeScanResponse(report, TEST_URL).previewUrl === null);
     }
   });
+  await test('실제 서버 판정 이유·근거 연결과 신고 집계를 보존한다', () => {
+    const result = normalizeScanResponse(backendReport({
+      verdict: { level: 'malicious', reasons: ['알려진 위협입니다.'], evidenceIds: ['ev-google'], limitations: [] },
+      reportCount: 2, isReported: true, reportedByUser: true,
+    }), TEST_URL);
+    assert(result.reasons[0] === '알려진 위협입니다.' && result.verdictEvidenceIds[0] === 'ev-google');
+    assert(result.reportCount === 2 && result.isReported === true && result.reportedByUser === true);
+  });
+  await test('위협 발견으로 미방문한 경우와 격리 정책·시간 초과를 구별한다', () => {
+    const skipped = normalizeScanResponse(backendReport({ sandboxAnalysis: { status: 'skipped', skipReason: 'known_malicious', screenshot: { status: 'skipped', available: false } } }), TEST_URL);
+    assert(skipped.previewMessage.includes('알려진 위협') && skipped.previewStatus === 'skipped' && skipped.previewUrl === null);
+    for (const [code, text] of [['target_not_allowed', '허용 대상'], ['worker_timeout', '제한 시간']]) {
+      const result = normalizeScanResponse(backendReport({ sandboxAnalysis: { status: 'blocked', errorCode: code, screenshot: { status: 'failed', available: false } } }), TEST_URL);
+      assert(result.previewMessage.includes(text) && result.limitations.some((item) => item.includes(text)) && result.verdict === 'inconclusive');
+    }
+  });
+  await test('실패한 서버 검사의 판정 이유를 오류 안내로 보존한다', async () => {
+    await withFetch(async () => new Response(JSON.stringify(backendReport({
+      status: 'failed', verdict: { level: 'unknown', reasons: ['분석을 완료하지 못했습니다.'], evidenceIds: [], limitations: [] },
+    }))), async () => {
+      await rejects(() => analyzeUrl(TEST_URL), (error) => error.code === 'scan_failed' && error.message === '분석을 완료하지 못했습니다.');
+    });
+  });
   await test('백엔드 보고서도 요청 URL이 다르면 거부한다', async () => {
     await rejects(() => normalizeScanResponse(backendReport({ requestedUrl: 'https://other.test/' }), TEST_URL), (error) => error.code === 'mismatched_response');
+  });
+  await test('공개 주소 검사 범위와 신고 미제공을 보존하며 실제 방문 주소·이미지를 만들지 않는다', () => {
+    const result = normalizeScanResponse(backendReport({ mode: 'static', analysisScope: 'static', reportAvailable: false,
+      reportCount: null, isReported: null, reportedByUser: false }), TEST_URL);
+    assert(result.analysisScope === 'static' && result.verdict === 'clear');
+    assert(result.finalUrl === null && result.previewUrl === null, '주소 검사만으로 방문·스크린샷을 주장했습니다.');
+    assert(result.previewMessage.includes('점검 중') && result.reportAvailable === false);
+    assert(result.reportCount === null && result.isReported === null, '미제공 신고 정보를 0건으로 바꿨습니다.');
+  });
+  await test('공개 주소 검사의 조회 실패는 미탐지 결과로 바꾸지 않는다', () => {
+    const result = normalizeScanResponse(backendReport({ mode: 'static', analysisScope: 'static',
+      staticAnalysis: { status: 'failed', providers: [{ name: 'google_safe_browsing', status: 'failed', matched: null }] },
+      verdict: { level: 'unknown', reasons: ['위협 조회를 완료하지 못했습니다.'] } }), TEST_URL);
+    assert(result.verdict === 'inconclusive' && result.providers[0].matched === null);
+  });
+  await test('신고 미제공 응답에서는 실제 접수 요청을 보내지 않는다', async () => {
+    await withFetch(async () => { throw new Error('미제공 신고 요청이 전송됐습니다.'); }, async () => {
+      const result = normalizeScanResponse(response({ verdict: 'phishing', reportAvailable: false }), TEST_URL);
+      await rejects(() => reportSite(result), (error) => error.code === 'report_unavailable');
+    });
   });
   await test('API 오류를 데모 성공으로 대체하지 않는다', async () => {
     await withFetch(async () => new Response('', { status: 503 }), async () => {
