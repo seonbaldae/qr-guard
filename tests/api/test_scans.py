@@ -164,3 +164,126 @@ def test_password_and_expected_brand_mismatch_are_suspicious():
         worker_egress_verified=True,
     )
     run_api(create_app(settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(worker))), scenario)
+
+
+class FakeBrandAnalyzer:
+    enabled = True
+
+    def __init__(self, signal):
+        self.signal = signal
+
+    async def analyze(self, _scan_id, _final_url, _png):
+        from app.phishpedia import BrandAnalysis
+        candidate = "Naver" if self.signal != "brand_unidentified" else None
+        return BrandAnalysis.model_validate({
+            "engine": "phishpedia", "status": "completed", "signal": self.signal,
+            "candidateBrand": candidate,
+            "referenceDomains": ["naver.com"] if candidate else [],
+            "rawSimilarity": 0.97 if candidate else None, "detectedLogoCount": 1 if candidate else 0,
+            "domainComparison": {
+                "status": "mismatch" if self.signal == "brand_domain_inconsistency" else
+                          "match" if self.signal == "brand_domain_match" else "not_evaluated",
+                "actualHost": "demo.example.test", "matchedReferenceDomain": None,
+            },
+        })
+
+
+class FailedBrandAnalyzer:
+    enabled = True
+
+    async def analyze(self, _scan_id, _final_url, _png):
+        from app.phishpedia import PhishpediaError
+        raise PhishpediaError("phishpedia_failed")
+
+
+def test_phishpedia_brand_domain_mismatch_is_suspicious_without_user_brand_hint():
+    from app.config import Settings
+    from app.main import create_app
+
+    def worker(_request):
+        return httpx.Response(200, json={
+            "finalUrl": "https://demo.example.test/login", "httpStatus": 200,
+            "pageTitle": "Naver", "passwordFieldCount": 0, "sensitiveFieldTypes": [],
+            "forms": [], "requestHosts": [], "redirected": False,
+            "screenshotBase64": base64.b64encode(png_bytes()).decode(), "limitations": [],
+        })
+
+    async def scenario(client):
+        accepted = await client.post("/api/scans", json={
+            "url": "https://demo.example.test/login", "mode": "sandbox",
+        })
+        report = (await client.get(f"/api/scans/{accepted.json()['scanId']}")).json()
+        assert report["verdict"]["level"] == "suspicious"
+        assert report["verdict"]["evidenceIds"] == ["ev-phishpedia-brand"]
+        assert report["sandboxAnalysis"]["signals"][-1]["kind"] == "brand_domain_mismatch"
+        assert report["evidence"][-1]["data"]["candidateBrand"] == "Naver"
+
+    settings = Settings(
+        worker_url="http://worker:8001", demo_origins=("https://demo.example.test",),
+        worker_egress_verified=True, phishpedia_image="seonbaldae-phishpedia",
+    )
+    run_api(create_app(
+        settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(worker)),
+        threat_check=fake_google(), brand_analyzer=FakeBrandAnalyzer("brand_domain_inconsistency"),
+    ), scenario)
+
+
+def test_phishpedia_unidentified_brand_never_publishes_clean_verdict():
+    from app.config import Settings
+    from app.main import create_app
+
+    def worker(_request):
+        return httpx.Response(200, json={
+            "finalUrl": "https://demo.example.test/", "httpStatus": 200,
+            "pageTitle": "Demo", "passwordFieldCount": 0, "sensitiveFieldTypes": [],
+            "forms": [], "requestHosts": [], "redirected": False,
+            "screenshotBase64": base64.b64encode(png_bytes()).decode(), "limitations": [],
+        })
+
+    async def scenario(client):
+        accepted = await client.post("/api/scans", json={
+            "url": "https://demo.example.test/", "mode": "sandbox",
+        })
+        report = (await client.get(f"/api/scans/{accepted.json()['scanId']}")).json()
+        assert report["verdict"]["level"] == "unknown"
+        assert any("브랜드" in item for item in report["verdict"]["limitations"])
+
+    settings = Settings(
+        worker_url="http://worker:8001", demo_origins=("https://demo.example.test",),
+        worker_egress_verified=True, phishpedia_image="seonbaldae-phishpedia",
+    )
+    run_api(create_app(
+        settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(worker)),
+        threat_check=fake_google(), brand_analyzer=FakeBrandAnalyzer("brand_unidentified"),
+    ), scenario)
+
+
+def test_phishpedia_failure_never_publishes_clean_verdict():
+    from app.config import Settings
+    from app.main import create_app
+
+    def worker(_request):
+        return httpx.Response(200, json={
+            "finalUrl": "https://demo.example.test/", "httpStatus": 200,
+            "pageTitle": "Demo", "passwordFieldCount": 0, "sensitiveFieldTypes": [],
+            "forms": [], "requestHosts": [], "redirected": False,
+            "screenshotBase64": base64.b64encode(png_bytes()).decode(), "limitations": [],
+        })
+
+    async def scenario(client):
+        accepted = await client.post("/api/scans", json={
+            "url": "https://demo.example.test/", "mode": "sandbox",
+        })
+        report = (await client.get(f"/api/scans/{accepted.json()['scanId']}")).json()
+        assert report["status"] == "completed"
+        assert report["verdict"]["level"] == "unknown"
+        assert any("브랜드" in item for item in report["sandboxAnalysis"]["limitations"])
+
+    settings = Settings(
+        worker_url="http://worker:8001", demo_origins=("https://demo.example.test",),
+        worker_egress_verified=True, phishpedia_image="seonbaldae-phishpedia",
+    )
+    run_api(create_app(
+        settings, worker_transport=httpx.MockTransport(jobs_worker_from_result(worker)),
+        threat_check=fake_google(), brand_analyzer=FailedBrandAnalyzer(),
+    ), scenario)

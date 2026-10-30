@@ -11,6 +11,7 @@ from app.config import Settings
 from app.models import (
     Evidence, SandboxResult, ScanReport, ScanRequest, ScreenshotState, Signal, VerdictResult,
 )
+from app.phishpedia import PhishpediaAnalyzer, PhishpediaError
 from app.precheck.safebrowsing import check_safe_browsing
 from app.precheck.url_rules import parse
 from app.static_adapter import ThreatCheck, analyze_static
@@ -28,11 +29,12 @@ class ScanCapacityError(Exception):
 class ScanService:
     def __init__(
         self, settings: Settings, worker_transport: httpx.AsyncBaseTransport | None = None,
-        threat_check: ThreatCheck | None = None,
+        threat_check: ThreatCheck | None = None, brand_analyzer: PhishpediaAnalyzer | None = None,
     ) -> None:
         self.settings = settings
         self.threat_check = threat_check or check_safe_browsing
         self.worker = WorkerClient(settings, worker_transport)
+        self.brand_analyzer = brand_analyzer or PhishpediaAnalyzer(settings)
         self.worker_slots = asyncio.Semaphore(settings.max_worker_concurrency)
         self.reports: dict[str, ScanReport] = {}
         self.screenshots: dict[str, bytes] = {}
@@ -142,6 +144,42 @@ class ScanService:
                                                         *result.limitations],
             )
             return
+        brand_complete = not self.brand_analyzer.enabled
+        brand_signal = None
+        if self.brand_analyzer.enabled:
+            try:
+                brand = await self.brand_analyzer.analyze(report.scan_id, result.final_url, png)
+                brand_signal = brand.signal
+                brand_complete = brand.signal == "brand_domain_match"
+                if brand.signal == "brand_domain_inconsistency":
+                    evidence_id = "ev-phishpedia-brand"
+                    report.evidence.append(Evidence(
+                        id=evidence_id, kind="brand_domain_mismatch", source="phishpedia",
+                        observed_at=utcnow(),
+                        summary="화면에서 식별한 브랜드의 기준 도메인과 실제 도착 도메인이 다릅니다.",
+                        data={
+                            "candidateBrand": brand.candidate_brand,
+                            "observedDomain": brand.domain_comparison.actual_host,
+                            "similarity": brand.raw_similarity,
+                        },
+                    ))
+                    report.sandbox_analysis.signals.append(Signal(
+                        id="sig-phishpedia-brand", kind="brand_domain_mismatch", severity="high",
+                        source="phishpedia",
+                        summary=f"{brand.candidate_brand or '알려진 브랜드'} 화면과 실제 도메인이 일치하지 않습니다.",
+                        evidence_ids=[evidence_id],
+                    ))
+                    report.verdict = VerdictResult(
+                        level="suspicious",
+                        reasons=["정상 브랜드를 사칭한 화면일 가능성이 있습니다."],
+                        evidence_ids=[evidence_id],
+                        limitations=["로고 유사도 분석은 브랜드 운영 주체를 확정하지 않습니다.",
+                                     "실제 계정 정보 제출이나 유출을 검증한 것은 아닙니다.",
+                                     *result.limitations],
+                    )
+                    return
+            except PhishpediaError:
+                report.sandbox_analysis.limitations.append("브랜드 로고 분석을 완료하지 못했습니다.")
         official = OFFICIAL_BRAND_DOMAINS.get(request.expected_brand or "")
         observed = parse(result.final_url).registered_domain
         mismatch = official is not None and observed != official
@@ -172,11 +210,17 @@ class ScanService:
             return
         complete = (provider.status == "checked" and final_provider.status == "checked"
                     and result.inspection_complete
-                    and (request.expected_brand is None or official is not None))
+                    and (request.expected_brand is None or official is not None)
+                    and brand_complete)
+        brand_limitations = []
+        if self.brand_analyzer.enabled and brand_signal == "brand_unidentified":
+            brand_limitations.append("화면에서 비교 가능한 브랜드 로고를 식별하지 못했습니다.")
+        elif self.brand_analyzer.enabled and brand_signal is None:
+            brand_limitations.append("브랜드 로고 분석 결과를 확인하지 못했습니다.")
         report.verdict = VerdictResult(
             level="no_known_threat" if complete else "unknown",
             reasons=["검사 범위에서 알려진 위협이 발견되지 않았습니다." if complete
                      else "검사 범위에 제한이 있어 결론을 내리지 못했습니다."],
             limitations=["검사 결과는 안전을 보증하지 않습니다.", "폼 제출과 실제 정보 유출은 검사하지 않았습니다.",
-                         *result.limitations],
+                         *brand_limitations, *result.limitations],
         )

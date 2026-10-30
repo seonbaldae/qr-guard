@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.config import Settings, configured_origin
 from app.models import ReportReceipt, ReportRequest, ScanAccepted, ScanReport, ScanRequest
+from app.phishpedia import PhishpediaAnalyzer
 from app.reporting import ReportStore
 from app.service import ScanCapacityError, ScanService
 from app.static_adapter import ThreatCheck
@@ -16,7 +17,7 @@ from app.static_adapter import ThreatCheck
 
 def create_app(
     settings: Settings | None = None, *, worker_transport: httpx.AsyncBaseTransport | None = None,
-    threat_check: ThreatCheck | None = None,
+    threat_check: ThreatCheck | None = None, brand_analyzer: PhishpediaAnalyzer | None = None,
 ) -> FastAPI:
     application = FastAPI(title="QR Guard", version="0.2.0")
     settings = settings or Settings.from_env()
@@ -24,7 +25,7 @@ def create_app(
         CORSMiddleware, allow_origins=[configured_origin(value) for value in settings.cors_origins],
         allow_methods=["GET", "POST"], allow_headers=["Content-Type"], allow_credentials=False,
     )
-    service = ScanService(settings, worker_transport, threat_check)
+    service = ScanService(settings, worker_transport, threat_check, brand_analyzer)
     application.state.scans = service
     reports = ReportStore()
     application.state.report_receipts = reports

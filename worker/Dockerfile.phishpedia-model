@@ -16,4 +16,6 @@ RUN pixi run python -c "from phishpedia import PhishpediaWrapper; PhishpediaWrap
     && test -s LOGO_FEATS.npy \
     && test -s LOGO_FILES.npy
 
+COPY run-phishpedia.py analyze-brand.py ./
+
 CMD ["pixi", "run", "python", "--version"]

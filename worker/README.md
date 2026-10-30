@@ -1,6 +1,6 @@
 # Docker 브라우저 Worker
 
-`worker.cjs`가 Playwright·Chromium으로 페이지를 방문해 PNG와 DOM·네트워크·리다이렉트 관찰을 반환합니다. FastAPI의 `app/worker.py`가 작업 생성·폴링·이미지 조회를 실제로 연결합니다. `Phishpedia` 관련 파일은 별도의 실험 자료이며 현재 실행 경로에서 모델 판정을 제공하지 않습니다.
+`worker.cjs`가 Playwright·Chromium으로 페이지를 방문해 PNG와 DOM·네트워크·리다이렉트 관찰을 반환합니다. FastAPI의 `app/worker.py`가 작업 생성·폴링·이미지 조회를 연결하고, `app/phishpedia.py`가 스크린샷을 별도의 네트워크 차단 모델 컨테이너에서 분석합니다.
 
 ## 권장 실행
 
@@ -91,9 +91,9 @@ docker build -f worker/Dockerfile.worker -t qr-guard-worker:local worker
 
 Docker는 VM 수준의 격리를 보증하지 않습니다. 통제된 페이지에서 확인한 브라우저 실행·네트워크 제한을 임의의 악성 페이지에 대한 완전한 격리 보증으로 확대 해석하지 마세요. 외부 방문을 추가할 때는 리다이렉트와 하위 리소스, DNS 재해석·내부 주소 차단까지 실제 전송 경로에서 검증해야 합니다.
 
-## Phishpedia 실험 파일
+## Phishpedia 판정 한계
 
-`Dockerfile.phishpedia`, `Dockerfile.phishpedia-model`, `PHISHPEDIA_REVISION`, `patches/`와 Python 스크립트는 실험용입니다. 외부 소스·모델 가중치·브랜드 자료·캐시는 저장소에 포함하지 않습니다. **현재 통합 실행에는 필요한 모델 가중치가 없고 Phishpedia의 브랜드 판정을 연결하지 않았습니다.** 이미지 빌드 이력이나 스크립트 존재를 모델 동작·성능 검증 완료로 해석하지 마세요. 모델 미검출·분석 실패는 정상 판정 근거가 아닙니다.
+`Dockerfile.phishpedia`, `Dockerfile.phishpedia-model`, `PHISHPEDIA_REVISION`, `patches/`와 Python 스크립트가 재현 가능한 모델 이미지를 만듭니다. 외부 소스·모델 가중치·브랜드 자료·캐시는 저장소에 포함하지 않고 이미지 빌드 과정에서 고정된 소스 커밋과 모델 설치 스크립트로 준비합니다. 로고 유사도 분석은 운영 주체를 인증하지 않으며, 모델 미식별·분석 실패는 정상 판정 근거가 아닙니다.
 
 ## 검증
 
