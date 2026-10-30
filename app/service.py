@@ -11,8 +11,9 @@ from app.config import Settings
 from app.models import (
     Evidence, SandboxResult, ScanReport, ScanRequest, ScreenshotState, Signal, VerdictResult,
 )
+from app.precheck.safebrowsing import check_safe_browsing
 from app.precheck.url_rules import parse
-from app.static_adapter import FeedSnapshot, analyze_static
+from app.static_adapter import ThreatCheck, analyze_static
 from app.worker import WorkerClient, WorkerError
 
 
@@ -25,9 +26,12 @@ class ScanCapacityError(Exception):
 
 
 class ScanService:
-    def __init__(self, settings: Settings, worker_transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self, settings: Settings, worker_transport: httpx.AsyncBaseTransport | None = None,
+        threat_check: ThreatCheck | None = None,
+    ) -> None:
         self.settings = settings
-        self.feed = FeedSnapshot.load(settings)
+        self.threat_check = threat_check or check_safe_browsing
         self.worker = WorkerClient(settings, worker_transport)
         self.worker_slots = asyncio.Semaphore(settings.max_worker_concurrency)
         self.reports: dict[str, ScanReport] = {}
@@ -49,7 +53,7 @@ class ScanService:
         report.updated_at = utcnow()
         try:
             report.static_analysis, report.evidence = await asyncio.to_thread(
-                analyze_static, request.url, self.feed, self.settings,
+                analyze_static, request.url, self.threat_check,
             )
             report.sandbox_analysis = SandboxResult(
                 status="not_requested", skip_reason="static_only",
@@ -61,8 +65,9 @@ class ScanService:
                         screenshot=ScreenshotState(status="skipped"),
                     )
                 report.verdict = VerdictResult(
-                    level="malicious", reasons=["알려진 피싱 URL로 확인되었습니다."],
-                    evidence_ids=["ev-feed"], limitations=["웹페이지를 방문하지 않았습니다."],
+                    level="malicious", reasons=["Google Safe Browsing에서 알려진 위협이 발견되었습니다."],
+                    evidence_ids=[item.id for item in report.evidence if item.kind == "known_threat_match"],
+                    limitations=["웹페이지를 방문하지 않았습니다."],
                 )
             else:
                 report.verdict = VerdictResult(
@@ -121,21 +126,17 @@ class ScanService:
         assert report.static_analysis is not None
         assert result.final_url is not None
         provider = report.static_analysis.providers[0]
-        final_provider = self.feed.lookup(result.final_url, self.settings.feed_max_age_seconds)
+        final_lookup = await asyncio.to_thread(self.threat_check, result.final_url)
+        final_provider = final_lookup.provider
         if final_provider.matched:
-            assert final_provider.checked_at is not None
-            report.evidence.append(Evidence(
-                id="ev-feed", kind="threat_feed_match", source="openphish",
-                observed_at=final_provider.checked_at,
-                summary="최종 도착 URL이 피싱 URL 목록과 정확히 일치했습니다.",
-            ))
-            report.sandbox_analysis.signals.append(Signal(
-                id="sig-feed", kind="threat_feed_match", severity="high", source="openphish",
-                summary="최종 도착 URL이 피싱 URL 목록에 일치합니다.", evidence_ids=["ev-feed"],
-            ))
+            final_evidence = [Evidence.model_validate(item.model_dump()) for item in final_lookup.evidence]
+            report.evidence.extend(final_evidence)
+            report.sandbox_analysis.signals.extend(
+                Signal.model_validate(item.model_dump()) for item in final_lookup.signals
+            )
             report.verdict = VerdictResult(
-                level="malicious", reasons=["최종 도착 URL이 알려진 피싱 URL로 확인되었습니다."],
-                evidence_ids=["ev-feed"], limitations=["폼 제출과 실제 정보 유출은 검사하지 않았습니다.",
+                level="malicious", reasons=["Google에서 최종 도착 URL에 대한 알려진 위협이 발견되었습니다."],
+                evidence_ids=[item.id for item in final_evidence], limitations=["폼 제출과 실제 정보 유출은 검사하지 않았습니다.",
                                                         *result.limitations],
             )
             return

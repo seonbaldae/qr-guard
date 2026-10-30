@@ -4,7 +4,7 @@ import asyncio
 import base64
 from io import BytesIO
 from dataclasses import replace
-import os
+
 
 import httpx
 from PIL import Image
@@ -12,7 +12,7 @@ import pytest
 
 from app.config import Settings
 from app.main import create_app
-from app.static_adapter import FeedSnapshot
+from .support import fake_google, google_result
 
 
 def worker_payload(**changes):
@@ -28,9 +28,12 @@ def worker_payload(**changes):
     return data
 
 
-def scan(settings, handler, body=None):
+def scan(settings, handler, body=None, *, threat_check=None):
     async def run():
-        app = create_app(settings, worker_transport=httpx.MockTransport(handler))
+        app = create_app(
+            settings, worker_transport=httpx.MockTransport(handler),
+            threat_check=threat_check or fake_google(["https://listed.example.test/"]),
+        )
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver",
         ) as client:
@@ -51,9 +54,7 @@ def scan(settings, handler, body=None):
 
 
 def settings_with_feed(tmp_path, **changes):
-    feed = tmp_path / "feed.txt"
-    feed.write_text("https://listed.example.test/\n", encoding="utf-8")
-    settings = Settings(feed_path=feed, worker_url="http://worker:8001",
+    settings = Settings(worker_url="http://worker:8001",
                         demo_origins=("https://demo.example.test",), worker_egress_verified=True)
     return replace(settings, **changes)
 
@@ -154,23 +155,21 @@ def test_known_match_never_calls_worker(tmp_path, mode):
     assert report["verdict"]["level"] == "malicious"
 
 
-def test_redirect_to_feed_match_is_malicious_after_worker_completes(tmp_path):
+def test_redirect_to_google_match_is_malicious_after_worker_completes(tmp_path):
     settings = settings_with_feed(tmp_path, demo_origins=(
         "https://demo.example.test", "https://listed.example.test",
     ))
     final_url = "https://listed.example.test/?token=private"
-    assert settings.feed_path is not None
-    settings.feed_path.write_text(final_url + "\n", encoding="utf-8")
     report, image = scan(settings, lambda _: httpx.Response(
         200, json=worker_payload(finalUrl=final_url, redirected=True),
-    ))
+    ), threat_check=fake_google([final_url]))
     assert report["verdict"]["level"] == "malicious"
     assert report["sandboxAnalysis"]["status"] == "completed"
     assert report["sandboxAnalysis"]["screenshot"]["status"] == "ready"
     assert image.status_code == 200
-    feed_evidence = [e for e in report["evidence"] if e["kind"] == "threat_feed_match"]
-    assert feed_evidence and feed_evidence[0]["id"] in report["verdict"]["evidenceIds"]
-    assert final_url not in str(feed_evidence) and "private" not in str(feed_evidence)
+    evidence = [e for e in report["evidence"] if e["kind"] == "known_threat_match"]
+    assert evidence and evidence[0]["id"] in report["verdict"]["evidenceIds"]
+    assert final_url not in str(evidence) and "private" not in str(evidence)
 
 
 def test_static_only_never_calls_worker(tmp_path):
@@ -184,7 +183,7 @@ def test_static_only_never_calls_worker(tmp_path):
     assert report["verdict"]["limitations"]
 
 
-def test_feed_match_is_full_url_not_domain(tmp_path):
+def test_static_analysis_preserves_google_no_match(tmp_path):
     report, _ = scan(settings_with_feed(tmp_path), lambda _: httpx.Response(
         200, json=worker_payload(),
     ), {"url": "https://listed.example.test/different-path", "mode": "static"})
@@ -192,29 +191,26 @@ def test_feed_match_is_full_url_not_domain(tmp_path):
     assert report["verdict"]["level"] != "malicious"
 
 
-def test_feed_becoming_stale_during_worker_yields_unknown(tmp_path, monkeypatch):
-    original_lookup = FeedSnapshot.lookup
+def test_final_google_failure_after_worker_yields_unknown(tmp_path):
     lookups = []
 
-    def lookup(self, url, max_age):
-        result = original_lookup(self, url, max_age)
+    def check(url):
+        result = google_result() if not lookups else google_result(status="failed")
         lookups.append(result)
-        return result if len(lookups) == 1 else result.model_copy(update={"status": "stale"})
+        return result
 
-    monkeypatch.setattr(FeedSnapshot, "lookup", lookup)
     report, _ = scan(settings_with_feed(tmp_path), lambda _: httpx.Response(
         200, json=worker_payload(),
-    ))
+    ), threat_check=check)
     assert len(lookups) == 2
-    assert lookups[0].status == "checked" and lookups[0].matched is False
+    assert lookups[0].provider.status == "checked" and lookups[0].provider.matched is False
     assert report["sandboxAnalysis"]["status"] == "completed"
     assert report["verdict"]["level"] == "unknown"
 
 
-def test_stale_feed_does_not_prove_absence_of_threats(tmp_path):
+def test_google_failure_does_not_prove_absence_of_threats(tmp_path):
     settings = settings_with_feed(tmp_path)
-    assert settings.feed_path is not None
-    os.utime(settings.feed_path, (1, 1))
-    report, _ = scan(settings, lambda _: httpx.Response(200, json=worker_payload()))
-    assert report["staticAnalysis"]["providers"][0]["status"] == "stale"
+    report, _ = scan(settings, lambda _: httpx.Response(200, json=worker_payload()),
+                     threat_check=fake_google(status="failed"))
+    assert report["staticAnalysis"]["providers"][0]["status"] == "failed"
     assert report["verdict"]["level"] == "unknown"

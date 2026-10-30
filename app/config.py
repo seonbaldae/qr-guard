@@ -2,7 +2,6 @@
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from app.precheck.payload import normalize
@@ -24,8 +23,6 @@ def configured_origin(value: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    feed_path: Path | None = None
-    feed_max_age_seconds: int = 86400
     worker_url: str | None = None
     demo_origins: tuple[str, ...] = ()
     cors_origins: tuple[str, ...] = ()
@@ -39,14 +36,12 @@ class Settings:
             configured_origin(self.worker_url)
         for value in (*self.demo_origins, *self.cors_origins):
             configured_origin(value)
-        if min(self.worker_timeout_ms, self.feed_max_age_seconds, self.max_scans, self.max_worker_concurrency) <= 0:
-            raise ValueError("Timeout, feed age and capacity settings must be positive")
+        if min(self.worker_timeout_ms, self.max_scans, self.max_worker_concurrency) <= 0:
+            raise ValueError("Timeout and capacity settings must be positive")
 
     @classmethod
     def from_env(cls) -> "Settings":
-        path = os.getenv("QR_GUARD_OPENPHISH_FILE", "")
         return cls(
-            feed_path=Path(path) if path else None,
             worker_url=os.getenv("QR_GUARD_WORKER_URL") or None,
             demo_origins=tuple(filter(None, (
                 value.strip() for value in os.getenv("QR_GUARD_DEMO_ORIGINS", "").split(",")

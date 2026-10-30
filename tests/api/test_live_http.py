@@ -13,6 +13,9 @@ import httpx
 def test_uvicorn_real_http_roundtrip():
     root = Path(__file__).resolve().parents[2]
     environment = {key: value for key, value in os.environ.items() if not key.startswith("QR_GUARD_")}
+    # Explicit empty canonical key disables both legacy environment and .env fallback.
+    environment["GOOGLE_SAFE_BROWSING_API_KEY"] = ""
+    environment.pop("SAFE_BROWSING_API_KEY", None)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]

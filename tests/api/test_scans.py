@@ -8,6 +8,8 @@ from io import BytesIO
 import httpx
 from PIL import Image
 
+from .support import fake_google
+
 
 def run_api(app, scenario):
     async def run():
@@ -41,13 +43,10 @@ def test_static_scan_connects_existing_analyzer():
     run_api(create_app(), scenario)
 
 
-def test_f1_exact_feed_match_is_malicious_without_worker(tmp_path):
+def test_f1_google_match_is_malicious_without_worker():
     assert importlib.util.find_spec("app.config") is not None, "Feed configuration is missing"
     from app.config import Settings
     from app.main import create_app
-
-    feed = tmp_path / "openphish.txt"
-    feed.write_text("https://example.test/phishing\n", encoding="utf-8")
 
     async def scenario(client):
         response = await client.post("/api/scans", json={
@@ -63,7 +62,7 @@ def test_f1_exact_feed_match_is_malicious_without_worker(tmp_path):
         assert set(report["verdict"]["evidenceIds"]) <= known
         assert report["verdict"]["evidenceIds"]
 
-    run_api(create_app(Settings(feed_path=feed)), scenario)
+    run_api(create_app(Settings(), threat_check=fake_google(["https://example.test/phishing"])), scenario)
 
 
 def test_sandbox_is_blocked_without_configured_safe_worker():
@@ -90,13 +89,11 @@ def png_bytes():
     return output.getvalue()
 
 
-def test_f2_worker_contract_returns_png_and_no_known_threat(tmp_path):
+def test_f2_worker_contract_returns_png_and_no_known_threat():
     assert importlib.util.find_spec("app.worker") is not None, "Worker adapter is missing"
     from app.config import Settings
     from app.main import create_app
 
-    feed = tmp_path / "openphish.txt"
-    feed.write_text("https://listed.example.test/\n", encoding="utf-8")
     png = png_bytes()
     calls = []
 
@@ -131,10 +128,10 @@ def test_f2_worker_contract_returns_png_and_no_known_threat(tmp_path):
         assert len(calls) == 1
 
     settings = Settings(
-        feed_path=feed, worker_url="http://worker:8001",
+        worker_url="http://worker:8001",
         demo_origins=("https://demo.example.test",), worker_egress_verified=True,
     )
-    run_api(create_app(settings, worker_transport=httpx.MockTransport(worker)), scenario)
+    run_api(create_app(settings, worker_transport=httpx.MockTransport(worker), threat_check=fake_google()), scenario)
 
 
 def test_password_and_expected_brand_mismatch_are_suspicious():
