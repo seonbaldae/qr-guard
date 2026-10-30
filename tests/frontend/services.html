@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QR Guard 서비스 계층 검증</title>
+    <style>
+      body { font: 16px/1.6 system-ui, sans-serif; max-width: 900px; padding: 28px; margin: auto; }
+      [data-pass="true"] { color: #096343; } [data-pass="false"] { color: #b42318; }
+    </style>
+  </head>
+  <body>
+    <h1>서비스 계층 검증</h1>
+    <p>브라우저 기본 기능으로 URL·응답 검증·취소·신고 동작을 확인합니다. 외부 사이트에 접속하지 않습니다.</p>
+    <p id="summary" aria-live="polite">검증 중…</p>
+    <ol id="results"></ol>
+    <script type="module" src="./services.js"></script>
+  </body>
+</html>
