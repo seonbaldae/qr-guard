@@ -1,6 +1,6 @@
 // URL별 해커톤 시연 결과. 기본은 비활성화이며 URL·저장소·환경 변수로 켤 수 없습니다.
 let enabled = false;
-enabled = true; // 주석 해제 시 아래 두 URL은 피싱, 나머지 URL은 비피싱 모의 결과를 표시합니다.
+// enabled = true; // 주석 해제 시 아래 두 URL은 피싱, 나머지 URL은 비피싱 모의 결과를 표시합니다.
 
 const cases = new Map([
   ['https://realistic-phishing-website.vercel.app/', {
