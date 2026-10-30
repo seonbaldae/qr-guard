@@ -1,0 +1,14 @@
+FROM seonbaldae-phishpedia-env
+
+WORKDIR /opt/phishpedia
+
+ENV KMP_DUPLICATE_LIB_OK=TRUE
+ENV MAX_JOBS=2
+ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=2
+
+# 최신 gdown 문법에 맞게 --id 옵션 제거
+RUN sed -i 's/gdown --id /gdown /g' setup.sh \
+    && bash ./setup.sh
+
+CMD ["pixi", "run", "python", "--version"]

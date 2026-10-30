@@ -1,0 +1,17 @@
+FROM seonbaldae-browser
+
+WORKDIR /app
+
+RUN mkdir -p /home/pwuser/worker-deps
+COPY --chown=pwuser:pwuser package.json package-lock.json /home/pwuser/worker-deps/
+RUN npm ci --prefix /home/pwuser/worker-deps --omit=dev --ignore-scripts --no-audit --no-fund
+ENV NODE_PATH=/home/pwuser/worker-deps/node_modules
+
+COPY worker.cjs .
+COPY observer.cjs .
+COPY network-analyzer.cjs redirect-analyzer.cjs dom-analyzer.cjs ./
+COPY verdict.cjs .
+
+EXPOSE 4000
+
+CMD ["node", "worker.cjs"]
