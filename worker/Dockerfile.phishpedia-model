@@ -11,4 +11,11 @@ ENV MKL_NUM_THREADS=2
 RUN sed -i 's/gdown --id /gdown /g' setup.sh \
     && bash ./setup.sh
 
+# 실행 때마다 호스트의 .cache 파일을 요구하지 않도록 이미지 안에서 한 번 생성합니다.
+RUN pixi run python -c "from phishpedia import PhishpediaWrapper; PhishpediaWrapper()" \
+    && test -s LOGO_FEATS.npy \
+    && test -s LOGO_FILES.npy
+
+COPY run-phishpedia.py analyze-brand.py ./
+
 CMD ["pixi", "run", "python", "--version"]

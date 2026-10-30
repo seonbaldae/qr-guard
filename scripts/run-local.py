@@ -15,10 +15,13 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "qr-guard-worker-live"
 IMAGE = "qr-guard-worker:local"
+PHISHPEDIA_ENV_IMAGE = "seonbaldae-phishpedia-env"
+PHISHPEDIA_IMAGE = "seonbaldae-phishpedia"
 
 
 def docker(*args, **kwargs):
-    return subprocess.run(["docker", *args], cwd=ROOT, check=True, **kwargs)
+    kwargs.setdefault("cwd", ROOT)
+    return subprocess.run(["docker", *args], check=True, **kwargs)
 
 
 def verify_container(public_preview=False):
@@ -78,6 +81,13 @@ def main():
         if base.returncode:
             docker("build", "-f", "worker/Dockerfile", "-t", "seonbaldae-browser", "worker")
         docker("build", "-f", "worker/Dockerfile.worker", "-t", IMAGE, "worker")
+        docker("build", "--platform", "linux/amd64", "-f", "Dockerfile.phishpedia",
+               "-t", PHISHPEDIA_ENV_IMAGE, ".", cwd=ROOT / "worker")
+        docker("build", "--platform", "linux/amd64", "-f", "Dockerfile.phishpedia-model",
+               "-t", PHISHPEDIA_IMAGE, ".", cwd=ROOT / "worker")
+    else:
+        docker("image", "inspect", IMAGE, stdout=subprocess.DEVNULL)
+        docker("image", "inspect", PHISHPEDIA_IMAGE, stdout=subprocess.DEVNULL)
     existing = subprocess.run(["docker", "container", "inspect", NAME], capture_output=True)
     created = existing.returncode != 0
     children = []
@@ -100,6 +110,7 @@ def main():
             "QR_GUARD_WORKER_EGRESS_VERIFIED": "true",
             "QR_GUARD_WORKER_CONCURRENCY": "1",
             "QR_GUARD_PUBLIC_PREVIEW": str(args.public_preview).lower(),
+            "QR_GUARD_PHISHPEDIA_IMAGE": PHISHPEDIA_IMAGE,
         })
         api = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app",
                                 "--host", "127.0.0.1", "--port", str(args.api_port),
@@ -107,7 +118,8 @@ def main():
         children.append(api)
         wait_ready(f"http://127.0.0.1:{args.api_port}/api/health", api)
         frontend_env = {key: value for key, value in os.environ.items()
-                        if key not in {"GOOGLE_SAFE_BROWSING_API_KEY", "SAFE_BROWSING_API_KEY"}}
+                        if key not in {"GOOGLE_SAFE_BROWSING_API_KEY", "SAFE_BROWSING_API_KEY",
+                                       "OPENAI_API_KEY"}}
         frontend_env.update(PORT=str(args.port), QR_GUARD_API=f"http://127.0.0.1:{args.api_port}")
         frontend = subprocess.Popen(["node", "scripts/dev-server.mjs"], env=frontend_env)
         children.append(frontend)

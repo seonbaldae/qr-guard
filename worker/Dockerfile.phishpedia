@@ -22,7 +22,17 @@ RUN curl -fsSL https://pixi.sh/install.sh \
 
 WORKDIR /opt/phishpedia
 
-COPY third_party/Phishpedia/ ./
+COPY PHISHPEDIA_REVISION /tmp/PHISHPEDIA_REVISION
+COPY patches/logo_matching.patch /tmp/logo_matching.patch
+
+# 외부 소스는 Git 저장소에 복사하지 않고 기록된 커밋만 직접 받습니다.
+RUN git init . \
+    && git remote add origin https://github.com/lindsey98/Phishpedia.git \
+    && git fetch --depth 1 origin "$(cat /tmp/PHISHPEDIA_REVISION)" \
+    && git checkout --detach FETCH_HEAD \
+    && git apply --check /tmp/logo_matching.patch \
+    && git apply /tmp/logo_matching.patch \
+    && rm -rf .git /tmp/PHISHPEDIA_REVISION /tmp/logo_matching.patch
 
 # 컨테이너 안의 설정만 Linux AMD64 / Python 3.10으로 제한합니다.
 RUN sed -i 's/^platforms = .*/platforms = ["linux-64"]/' pixi.toml \
