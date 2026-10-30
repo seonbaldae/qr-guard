@@ -1,0 +1,14 @@
+# CLI uploads contain only the frontend and its static packaging script.
+/*
+!index.html
+!src/
+!assets/
+!scripts/
+/scripts/*
+!/scripts/prepare-vercel.mjs
+!vercel.json
+
+# Do not upload hidden files, credentials, or local generated files.
+**/.*
+dist/
+node_modules/

@@ -27,6 +27,41 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 정적 서버는 API 요청을 처리하거나 FastAPI로 전달하지 않습니다. 기본 프런트 설정에서 직접 주소를 검사하면 API 연결 오류가 표시되며, 이를 데모 성공으로 자동 대체하지 않습니다.
 
+## GitHub → Vercel 프런트 배포
+
+모의 피싱 사이트와 같은 GitHub 연동 방식으로 **모바일 프런트엔드**를 Vercel에 배포할 수 있습니다. 저장소 루트의 `vercel.json`이 정적 사이트 설정을 지정합니다. 프로젝트의 프레임워크는 **Other**로 사용하며 Python/FastAPI 자동 감지를 사용하지 않습니다.
+
+1. [Vercel 새 프로젝트](https://vercel.com/new)에서 GitHub 저장소 `seonbaldae/qr-guard`를 가져옵니다. 목록에 없다면 Vercel GitHub App에 해당 저장소 접근을 허용합니다.
+2. **Root Directory**를 저장소 루트(`./`), **Framework Preset**을 **Other**로 선택합니다.
+3. 아래 설정이 적용되는지 확인한 뒤 배포합니다. 기존 Vercel 프로젝트가 있다면 새로 만들지 말고 해당 프로젝트의 Git 저장소와 설정을 확인합니다.
+
+| 설정 | 값 |
+| --- | --- |
+| Framework Preset | `Other` (`framework: null`) |
+| Install Command | 실행하지 않음 (`installCommand: ""`) |
+| Build Command | `node scripts/prepare-vercel.mjs` |
+| Output Directory | `dist` |
+| 환경 변수 | 프런트 화면·샘플 체험에는 필요 없음 |
+
+이 단계는 Node.js 기본 기능으로 정적 파일을 복사하는 작업입니다. npm 의존성·패키지 설정·번들러·트랜스파일러를 추가하지 않습니다. Vercel 빌드 환경의 Node.js를 사용하며 로컬 프런트 개발에는 여전히 빌드가 필요하지 않습니다.
+
+`scripts/prepare-vercel.mjs`는 기존 `dist/`를 새로 만들고 `index.html`, `src/`의 JS·CSS, `assets/`의 이미지 파일만 복사합니다. ES Modules와 `/assets/...` 경로는 그대로 유지합니다. **출력 디렉토리를 저장소 루트 `.`로 바꾸지 마세요.** 이 저장소에는 백엔드·문서·테스트도 있기 때문에 공개 파일을 `dist/`로 제한합니다.
+
+`.vercelignore`는 CLI 업로드를 프런트 파일과 복사 스크립트로 제한합니다. Git 연동 배포의 공개 범위는 `dist/`에 복사한 파일 목록으로 제한합니다. `.vercel/` 연결 정보와 생성된 `dist/`는 `.gitignore`에 포함됩니다.
+
+GitHub와 Vercel은 최초 한 번 연결해야 합니다. 설정 파일을 푸시하는 것만으로 계정 연결이 생성되지는 않습니다. 연결 후 Production Branch(보통 `main`)에 푸시하면 Production 배포가 갱신되고, 다른 브랜치·PR에는 Preview 배포가 생성됩니다. 별도 GitHub Actions나 `VERCEL_TOKEN`은 필요하지 않습니다. 설정 근거: [Vercel 정적 설정](https://vercel.com/docs/project-configuration/vercel-json), [GitHub 연동 배포](https://vercel.com/docs/git/vercel-for-github), [CLI 업로드 제외](https://vercel.com/docs/deployments/vercel-ignore).
+
+Vercel의 HTTPS 배포 주소에서 카메라를 사용할 수 있지만, 브라우저의 QR 인식 API 지원과 카메라 권한은 여전히 필요합니다. 배포 후 촬영 화면·“샘플로 확인하기”의 정상/피싱 결과·미리보기 이미지·재스캔을 확인하세요.
+
+로컬에서 실제 정적 배포 출력만 확인하려면 다음과 같이 실행합니다.
+
+```sh
+node scripts/prepare-vercel.mjs
+python3 -m http.server 8080 --bind 127.0.0.1 --directory dist
+```
+
+Vercel에는 FastAPI·Worker·신고 API가 함께 배포되지 않습니다. 현재 FastAPI는 단일 프로세스의 메모리에 검사 작업과 PNG를 보관하므로 기존 별도 서버 실행 방식을 유지합니다. 실제 검사는 아래의 프런트 API 계약 조정과 별도 HTTPS 백엔드 연결이 필요합니다. 프런트의 `apiBaseUrl`과 백엔드 CORS 출처를 실제 배포 주소에 맞춰야 하며, Google API 키는 백엔드에만 설정합니다. 그 전까지는 샘플 체험을 사용할 수 있고 실제 검사 요청은 연결 오류로 처리됩니다.
+
 ## 백엔드 실행
 
 Python 3.11 이상이 필요합니다. 저장소 루트에서 개발·테스트 의존성을 설치하고 실행합니다.
