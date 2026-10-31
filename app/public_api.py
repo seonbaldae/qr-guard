@@ -57,7 +57,8 @@ def configured_cloud_worker():
     if os.getenv("QR_GUARD_CLOUD_WORKER_VERIFIED") != "true":
         return CloudWorkerClient(None)
     try:
-        return CloudWorkerClient(os.getenv("QR_GUARD_CLOUD_WORKER_IMAGE"))
+        return CloudWorkerClient(os.getenv("QR_GUARD_CLOUD_WORKER_IMAGE"),
+                                 snapshot_id=os.getenv("QR_GUARD_CLOUD_WORKER_SNAPSHOT"))
     except ValueError:
         return CloudWorkerClient(None)
 

@@ -10,7 +10,7 @@ from PIL import Image
 
 from app.cloud_worker import (
     CloudWorkerClient, CloudWorkerError, DENIED_SUBNETS, INPUT_PATH, MAX_PNG_BYTES,
-    MAX_RESULT_BYTES, RESULT_PATH, SCREENSHOT_PATH, IPV6_SYSCTL_ARGS, VERIFY_IPV6_DISABLED,
+    MAX_RESULT_BYTES, RESULT_PATH, SCREENSHOT_PATH, IPV6_SYSCTL_ARGS, VERIFY_IPV6_DISABLED, RUNNER_ENV,
 )
 
 IMAGE = "team/project/qr-worker@sha256:" + "a" * 64
@@ -74,12 +74,14 @@ class FakeBox:
         self.sysctl_returncode, self.ipv6_verify_returncode = sysctl_returncode, ipv6_verify_returncode
         self.sysctl_error = sysctl_error
         self.cleanup_calls = []
+        self.destroy_orphan_options = []
 
     async def stop(self):
         self.cleanup_calls.append("stop")
 
     async def destroy(self, *, delete_orphan_snapshots):
-        assert delete_orphan_snapshots is True
+        assert isinstance(delete_orphan_snapshots, bool)
+        self.destroy_orphan_options.append(delete_orphan_snapshots)
         self.cleanup_calls.append("destroy")
         self.exited = True
 
@@ -153,7 +155,7 @@ def test_real_sdk_policy_and_process_contract_keep_credentials_out_of_vm():
                         ("node", ["-e", VERIFY_IPV6_DISABLED],
                          {"kill_after": 3, "capture_output": True, "check": True}),
                         ("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
-                         {"cwd": "/app", "kill_after": 25, "capture_output": True, "check": False})]
+                         {"cwd": "/app", "kill_after": 25, "capture_output": True, "check": False, "env": RUNNER_ENV})]
     assert box.fs.writes[0][0] == INPUT_PATH
     assert json.loads(box.fs.writes[0][1]) == {"scanId": "scan_123", "url": TARGET, "timeoutMs": 20000}
     assert box.fs.reads == [(RESULT_PATH, MAX_RESULT_BYTES + 1), (SCREENSHOT_PATH, MAX_PNG_BYTES + 1)]
@@ -472,3 +474,40 @@ def test_stop_that_ignores_cancellation_cannot_delay_destroy_or_response(monkeyp
         await lingering
 
     asyncio.run(scenario())
+
+
+def test_snapshot_source_uses_real_sdk_schema_and_preserves_clean_base_snapshot(monkeypatch):
+    monkeypatch.setenv("PRIVATE_TEST_KEY", "never-copy-host-environment")
+    box = FakeBox()
+    factory = Factory(box)
+    client = CloudWorkerClient(snapshot_id="snap_clean123", factory=factory, resolver=public_dns)
+    result, image = asyncio.run(client.analyze("scan_123", TARGET))
+    assert client.enabled and result.inspection_complete and image == png_bytes()
+    options = factory.options[0]
+    assert "image" not in options and "env" not in options
+    assert options["source"].to_api_dict() == {"type": "snapshot", "snapshotId": "snap_clean123"}
+    assert options["persistent"] is False and options["execution_time_limit"] == 45
+    assert options["network_policy"].subnets.deny == DENIED_SUBNETS
+    assert box.cleanup_calls == ["stop", "destroy"] and box.destroy_orphan_options == [False]
+    runner = next(item for item in box.calls if "/app/cloud/run.cjs" in item[1])
+    assert runner[2]["env"] == RUNNER_ENV and "PRIVATE_TEST_KEY" not in runner[2]["env"]
+
+
+@pytest.mark.parametrize("snapshot", ["snap_", "snapshot_123", "snap_bad/id", "snap_has space", "snap_" + "x" * 129,
+                                      "https://example.com/snapshot", "snap_bad\nvalue"])
+def test_snapshot_identifier_is_bounded_and_cannot_be_a_url_or_path(snapshot):
+    with pytest.raises(ValueError, match="snapshot"):
+        CloudWorkerClient(snapshot_id=snapshot)
+
+
+def test_image_and_snapshot_sources_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="exactly one"):
+        CloudWorkerClient(IMAGE, snapshot_id="snap_clean123")
+
+
+def test_snapshot_failure_still_destroys_request_vm_without_deleting_base():
+    box = FakeBox(result_body(scanId="another_request"))
+    client = CloudWorkerClient(snapshot_id="snap_clean123", factory=Factory(box), resolver=public_dns)
+    with pytest.raises(CloudWorkerError, match="worker_invalid_response"):
+        asyncio.run(client.analyze("scan_123", TARGET))
+    assert box.cleanup_calls == ["stop", "destroy"] and box.destroy_orphan_options == [False]

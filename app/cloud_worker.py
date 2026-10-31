@@ -54,12 +54,15 @@ try {
 """
 _DENIED_NETWORKS = tuple(ipaddress.ip_network(item) for item in DENIED_SUBNETS)
 _IMAGE = re.compile(r"^(?:vcr\.vercel\.com/)?[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*){0,2}@sha256:[0-9a-f]{64}$")
+_SNAPSHOT = re.compile(r"^snap_[A-Za-z0-9_-]{1,128}$")
 _SCAN_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _HOST = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}$")
 _SAFE_ERRORS = {"unsafe_target", "worker_policy_blocked", "worker_timeout", "worker_unreachable", "worker_invalid_response", "invalid_screenshot"}
 BoundedText = Annotated[StrictStr, Field(max_length=1000)]
 HostText = Annotated[StrictStr, Field(max_length=255, pattern=_HOST.pattern)]
 UrlText = Annotated[StrictStr, Field(max_length=2048)]
+RUNNER_ENV = {"NODE_PATH": "/opt/qr-deps/node_modules", "NODE_OPTIONS": "--max-old-space-size=512",
+              "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright"}
 
 
 class CloudWorkerError(Exception):
@@ -221,11 +224,11 @@ def _discard_cleanup_exception(task: asyncio.Task) -> None:
         task.exception()
 
 
-async def _cleanup_sandbox(box: Any) -> None:
+async def _cleanup_sandbox(box: Any, *, delete_orphan_snapshots: bool = True) -> None:
     failed = False
     # Bound the operations separately so a stalled stop never prevents a destroy
     # attempt. These are the same public SDK calls used by its context manager.
-    for operation in (box.stop, lambda: box.destroy(delete_orphan_snapshots=True)):
+    for operation in (box.stop, lambda: box.destroy(delete_orphan_snapshots=delete_orphan_snapshots)):
         task = None
         try:
             task = asyncio.create_task(operation())
@@ -242,9 +245,9 @@ async def _cleanup_sandbox(box: Any) -> None:
         raise CloudWorkerError("worker_unreachable")
 
 
-async def _finish_cleanup(box: Any) -> None:
+async def _finish_cleanup(box: Any, *, delete_orphan_snapshots: bool = True) -> None:
     # Shield only the independently bounded cleanup, never browser execution.
-    cleanup = asyncio.create_task(_cleanup_sandbox(box))
+    cleanup = asyncio.create_task(_cleanup_sandbox(box, delete_orphan_snapshots=delete_orphan_snapshots))
     cancellation = None
     while not cleanup.done():
         try:
@@ -262,7 +265,7 @@ async def _finish_cleanup(box: Any) -> None:
 
 
 @asynccontextmanager
-async def _managed_sandbox(operation):
+async def _managed_sandbox(operation, *, delete_orphan_snapshots: bool = True):
     # Awaiting create_sandbox is a supported SDK API for explicit ownership.
     box = await operation
     body_error = None
@@ -273,7 +276,7 @@ async def _managed_sandbox(operation):
         raise
     finally:
         try:
-            await _finish_cleanup(box)
+            await _finish_cleanup(box, delete_orphan_snapshots=delete_orphan_snapshots)
         except Exception:
             if isinstance(body_error, asyncio.CancelledError):
                 raise body_error
@@ -281,13 +284,18 @@ async def _managed_sandbox(operation):
 
 
 class CloudWorkerClient:
-    def __init__(self, image: str | None, *, factory: Callable[..., Any] | None = None,
+    def __init__(self, image: str | None = None, *, snapshot_id: str | None = None, factory: Callable[..., Any] | None = None,
                  resolver: Callable[[str, int], Awaitable[list[str]]] | None = None):
         self.image = image or ""
         scoped = self.image.removeprefix("vcr.vercel.com/").split("@", 1)[0]
         if self.image and (not _IMAGE.fullmatch(self.image) or ("/" in scoped and "." in scoped.split("/", 1)[0])):
             raise ValueError("Cloud Worker image must be a VCR reference pinned by sha256 digest")
-        self.enabled = bool(self.image)
+        self.snapshot_id = snapshot_id or ""
+        if self.snapshot_id and (not isinstance(self.snapshot_id, str) or not _SNAPSHOT.fullmatch(self.snapshot_id)):
+            raise ValueError("Cloud Worker snapshot must be a bounded snap_ identifier")
+        if self.image and self.snapshot_id:
+            raise ValueError("Cloud Worker requires exactly one image or snapshot source")
+        self.enabled = bool(self.image or self.snapshot_id)
         self._factory = factory
         self._resolver = resolver or _resolve
 
@@ -316,17 +324,20 @@ class CloudWorkerClient:
 
         try:
             from vercel import sandbox
-            from vercel.sandbox import NetworkPolicy, NetworkPolicySubnets, SandboxResources
+            from vercel.sandbox import NetworkPolicy, NetworkPolicySubnets, SandboxResources, SnapshotSource
 
             factory = self._factory or sandbox.create_sandbox
             policy = NetworkPolicy.custom(allow={"*": ()}, subnets=NetworkPolicySubnets(deny=DENIED_SUBNETS))
+            source = {"source": SnapshotSource(snapshot_id=self.snapshot_id)} if self.snapshot_id else {"image": self.image}
             async with asyncio.timeout(65):
-                async with _managed_sandbox(factory(image=self.image, persistent=False, execution_time_limit=45,
-                                                   resources=SandboxResources(vcpus=1, memory=2048), network_policy=policy)) as box:
+                async with _managed_sandbox(factory(**source, persistent=False, execution_time_limit=45,
+                                                   resources=SandboxResources(vcpus=1, memory=2048), network_policy=policy),
+                                            delete_orphan_snapshots=not bool(self.snapshot_id)) as box:
                     await _disable_ipv6(box)
                     await box.fs.write_text(INPUT_PATH, json.dumps({"scanId": scan_id, "url": url, "timeoutMs": 20000}))
                     process = await box.run_process("node", ["--max-old-space-size=512", "/app/cloud/run.cjs"],
-                                                    cwd="/app", kill_after=25, capture_output=True, check=False)
+                                                    cwd="/app", kill_after=25, capture_output=True, check=False,
+                                                    env=dict(RUNNER_ENV))
                     if process.returncode not in (0, 1):
                         raise CloudWorkerError("worker_unreachable")
                     data = await _read_bounded(box.fs, RESULT_PATH, MAX_RESULT_BYTES)

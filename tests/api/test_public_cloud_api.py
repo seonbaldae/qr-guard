@@ -205,6 +205,27 @@ def test_concurrent_requests_have_independent_ids_images_and_threat_branches():
 def test_environment_requires_both_verified_flag_and_pinned_image(monkeypatch, verified, image, enabled):
     monkeypatch.setenv("QR_GUARD_CLOUD_WORKER_VERIFIED", verified)
     monkeypatch.setenv("QR_GUARD_CLOUD_WORKER_IMAGE", image)
+    monkeypatch.delenv("QR_GUARD_CLOUD_WORKER_SNAPSHOT", raising=False)
+
+    async def scenario():
+        application = create_public_app(threat_check=fake_google())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="https://qr.test") as api:
+            result = (await api.get("/api/capabilities")).json()
+            assert result["previewAvailable"] is enabled
+            assert result["scanMode"] == ("sandbox" if enabled else "static")
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("verified,image,snapshot,enabled", [
+    ("true", "", "snap_clean123", True), ("false", "", "snap_clean123", False),
+    ("true", "", "snapshot_bad", False), ("true", "", "snap_bad/id", False),
+    ("true", "worker@sha256:" + "a" * 64, "snap_clean123", False),
+])
+def test_snapshot_configuration_uses_same_verification_gate_and_rejects_ambiguous_sources(
+        monkeypatch, verified, image, snapshot, enabled):
+    monkeypatch.setenv("QR_GUARD_CLOUD_WORKER_VERIFIED", verified)
+    monkeypatch.setenv("QR_GUARD_CLOUD_WORKER_IMAGE", image)
+    monkeypatch.setenv("QR_GUARD_CLOUD_WORKER_SNAPSHOT", snapshot)
 
     async def scenario():
         application = create_public_app(threat_check=fake_google())

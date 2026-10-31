@@ -11,8 +11,8 @@
 - 다른 저장소의 모의 피싱 페이지는 별도 프로젝트다. 이 서비스 화면에 사칭 로그인·개인정보 입력 화면을 만들지 않는다.
 - 별도 요청 없이 배포하거나 외부에 링크·QR을 배포하지 않는다.
 - Vercel 배포는 `dist/` 정적 프런트와 별도로 빌드한 공개 Python Functions를 같은 출처로 제공한다. `scripts/prepare-vercel.mjs --public --cloud-preview`는 Node.js 기본 기능으로 허용된 파일을 복사하고 생성된 `dist/src/deployment-config.js`만 `direct/sandbox`로 설정한다. `--public`만 사용하면 `direct/static` 구성이다. 소스의 로컬 `job/sandbox` 기본값을 바꾸지 않는다. 컴파일·번들링은 하지 않으며 백엔드·테스트·비밀 설정을 정적 출력에 포함하지 않는다.
-- 공개 API는 `app/public_api.py`에서 요청별 정적 검사와 선택적인 클라우드 방문을 처리하고 `api/analyze.py`, `api/health.py`, `api/capabilities.py`에서 제공한다. 클라우드 방문은 `worker/cloud/`의 독립적인 Docker 이미지를 VCR에 고정 digest로 저장한 뒤 Vercel Sandbox의 요청별 임시 VM에서 실행하는 구조다. 로컬 Mac의 Docker 데몬이나 개발 Worker를 인터넷에 노출하는 구조로 설명하지 않는다.
-- 기존 `worker.cjs` 작업 서버·`scan.cjs`·로컬 Phishpedia 파이프라인은 별도 개발 경로로 보존한다. 공개 서버리스 함수에 로컬 Docker CLI·메모리 작업 폴링·메모리 신고를 그대로 올리지 않는다. 클라우드 이미지·실브라우저·공개 API 연결 검증은 현재 진행 중이며, 이 지침을 배포 성공의 근거로 사용하지 않는다.
+- 공개 API는 `app/public_api.py`에서 요청별 정적 검사와 선택적인 클라우드 방문을 처리하고 `api/analyze.py`, `api/health.py`, `api/capabilities.py`에서 제공한다. 클라우드 방문은 고정 digest의 VCR Docker 이미지 또는 같은 `worker/cloud/` runner·고정 의존성을 준비한 Vercel Sandbox 스냅샷 중 하나로 요청별 임시 VM을 만드는 구조다. 스냅샷 사용을 Docker 엔진 실행이나 이미지 게시 완료로 설명하지 않으며 로컬 Mac의 Docker 데몬이나 개발 Worker를 인터넷에 노출하지 않는다.
+- 기존 `worker.cjs` 작업 서버·`scan.cjs`·로컬 Phishpedia 파이프라인은 별도 개발 경로로 보존한다. 공개 서버리스 함수에 로컬 Docker CLI·메모리 작업 폴링·메모리 신고를 그대로 올리지 않는다. VCR 이미지 게시는 blob commit 시간 초과로 완료되지 않았으며 스냅샷 준비·실브라우저·공개 API 연결 검증을 진행 중이다. 이 지침을 배포 성공의 근거로 사용하지 않는다.
 
 ## 필수 기술 제약
 
@@ -201,10 +201,11 @@ tests/                      # 백엔드와 프런트의 계약·회귀 검증
 - 선택적인 `--public-preview`도 Docker 네트워크 `none`을 유지한다. loopback 프록시·표준 입출력 터널·호스트 TCP 중계기로 공개 IPv4의 80/443만 연결하며 DNS 반환 주소 검증과 숫자 IP 고정을 보존한다. TLS 인증서 검증을 끄지 않고 내부/메타데이터 주소를 허용하지 않는다. GET·HEAD 등 HTTPS 요청 정책은 브라우저 라우팅에 의존함을 독립적인 방화벽 보증과 구분한다. 기존 컨테이너의 모드·이미지가 다르면 자동 교체하지 않고 실행을 거부한다.
 - 로컬 Docker 통합 실행은 Worker PNG를 네트워크가 차단된 Phishpedia 이미지에 전달해 로고 후보와 기준 도메인을 비교한다. 모델 미식별·실패를 정상 판정 근거로 사용하지 않고, 로고 유사도 분석을 운영 주체 인증이나 성능 검증 완료로 설명하지 않는다.
 - 클라우드 Worker는 `worker/cloud/Dockerfile`을 `worker/` 컨텍스트에서 빌드한다. Dockerfile 전용 ignore로 필요한 runner·분석 모듈·고정된 의존성만 이미지에 포함하고 모델 캐시·URL 입력·PNG·서버 키는 넣지 않는다. 이미지 tag의 존재를 검증 완료로 해석하지 말고 VCR의 `@sha256:` digest를 서버 설정에 고정한다.
-- 공개 클라우드 활성화 설정은 `QR_GUARD_CLOUD_WORKER_IMAGE`와 `QR_GUARD_CLOUD_WORKER_VERIFIED=true`다. 후자는 실제 VM 방화벽·IPv6 차단·Chromium 샌드박스·PNG 회수 검증 후에만 설정한다. 플래그만 켜서 네트워크 검증을 대신하지 않는다. Google 키·Vercel SDK 인증·OIDC 자격 증명은 API 서버에만 두고 VM에 전달하지 않는다.
+- 공개 클라우드 소스는 `QR_GUARD_CLOUD_WORKER_IMAGE` 또는 `QR_GUARD_CLOUD_WORKER_SNAPSHOT` 중 정확히 하나만 설정한다. 둘을 함께 설정하면 구성을 거부한다. 공통 게이트 `QR_GUARD_CLOUD_WORKER_VERIFIED=true`는 실제 선택한 소스에서 VM 방화벽·IPv6 차단·Chromium 샌드박스·PNG 회수를 검증한 후에만 설정한다. 플래그만 켜서 네트워크 검증을 대신하지 않는다. Google 키·Vercel SDK 인증·OIDC 자격 증명은 API 서버에만 두고 VM에 전달하지 않는다.
+- 스냅샷에는 runner·분석 모듈·고정 의존성만 준비하고 키·검사 URL·결과·PNG는 넣지 않는다. 소스 스냅샷은 요청 VM과 구분해 보존하며 요청 정리에는 `delete_orphan_snapshots=False`를 사용한다. 원본 만료 정책을 실제로 확인하고, 요청 VM은 `persistent=False`·45초·2GiB 제한과 같은 네트워크 검증을 적용한다.
 - 요청별 VM에는 검증된 사설망·메타데이터 차단 정책을 강제한다. 현재 플랫폼의 서브넷 규칙과 별도로 VM의 모든 IPv6 인터페이스를 비활성화하고 읽어서 확인한 뒤 Chromium을 실행한다. URL·DNS 검사는 추가 방어이며 DNS 재바인딩의 네트워크 경계를 대신하지 않는다. runner의 `chromiumSandbox: true`를 유지하고 이를 끄는 우회로 성공을 만들지 않는다.
 - VM에서는 `/tmp/qr-input.json`을 읽는 `node /app/cloud/run.cjs`를 명시적으로 실행한다. Docker 이미지의 ENTRYPOINT/CMD가 자동 실행된다고 가정하지 않는다. 제한된 결과 JSON·PNG를 회수한 후 성공·오류·취소 경로 모두에서 VM을 정리한다. 요청 URL이나 PNG를 명령 인자·표준 출력·로그에 넣지 않고 임시 파일과 API 응답으로만 취급한다. 관찰 runner의 기본 실행 제한은 20초이며 이미지 부팅·회수와 함수 전체 제한을 구분한다.
-- Vercel 공개 클라우드 관찰과 로컬 Docker 통합 실행을 구분한다. 공개 API의 실제 HTTPS 요청·응답과 배포 상태를 확인하기 전에는 배포 완료라고 보고하지 않는다. 공개 Google 키는 서버 환경 변수의 민감한 값으로 관리하고 빌드 출력·업로드 소스·로그에서 제외한다. `.vercelignore`에는 공개 API의 소스 의존성만 포함하며 Worker 이미지는 별도로 빌드·배포한다.
+- Vercel 공개 클라우드 관찰과 로컬 Docker 통합 실행을 구분한다. 공개 API의 실제 HTTPS 요청·응답과 배포 상태를 확인하기 전에는 배포 완료라고 보고하지 않는다. 공개 Google 키는 서버 환경 변수의 민감한 값으로 관리하고 빌드 출력·업로드 소스·로그에서 제외한다. `.vercelignore`에는 공개 API의 소스 의존성만 포함하며 Worker 이미지 또는 스냅샷은 별도로 준비한다.
 - 공개 구성의 로컬 재현은 `app.public_api:app`를 8001 포트에 실행하고 `node scripts/prepare-vercel.mjs --public --cloud-preview` 뒤 `PORT=8086 QR_GUARD_API=http://127.0.0.1:8001 node scripts/dev-server.mjs --public`로 확인한다. 클라우드 서버 설정·SDK 인증이 없다면 실제 VM 방문까지 확인한 것이 아니다. 휴대전화 하드웨어 QR 촬영과 실제 외부 배포 검증도 별도로 확인한다.
 
 - 변경 전 현재 파일·지침·Git 변경 상태를 확인하고 기존 작업을 보존한다. 사용자가 요청한 범위만 변경하며 문서 작성 요청을 앱 구현이나 백엔드 변경으로 확대하지 않는다.
