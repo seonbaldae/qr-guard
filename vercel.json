@@ -6,7 +6,7 @@
   "outputDirectory": "dist",
   "functions": {
     "api/*.py": {
-      "maxDuration": 120,
+      "maxDuration": 300,
       "excludeFiles": "{worker/**,tests/**,docs/**,scripts/**,src/**,assets/**,dist/**,.venv/**,.git/**,.env*}"
     }
   },

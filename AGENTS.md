@@ -12,7 +12,7 @@
 - 별도 요청 없이 배포하거나 외부에 링크·QR을 배포하지 않는다.
 - Vercel 배포는 `dist/` 정적 프런트와 별도로 빌드한 공개 Python Functions를 같은 출처로 제공한다. `scripts/prepare-vercel.mjs --public --cloud-preview`는 Node.js 기본 기능으로 허용된 파일을 복사하고 생성된 `dist/src/deployment-config.js`만 `direct/sandbox`로 설정한다. `--public`만 사용하면 `direct/static` 구성이다. 소스의 로컬 `job/sandbox` 기본값을 바꾸지 않는다. 컴파일·번들링은 하지 않으며 백엔드·테스트·비밀 설정을 정적 출력에 포함하지 않는다.
 - 공개 API는 `app/public_api.py`에서 요청별 정적 검사와 선택적인 클라우드 방문을 처리하고 `api/analyze.py`, `api/health.py`, `api/capabilities.py`에서 제공한다. 클라우드 방문은 고정 digest의 VCR Docker 이미지 또는 같은 `worker/cloud/` runner·고정 의존성을 준비한 Vercel Sandbox 스냅샷 중 하나로 요청별 임시 VM을 만드는 구조다. 스냅샷 사용을 Docker 엔진 실행이나 이미지 게시 완료로 설명하지 않으며 로컬 Mac의 Docker 데몬이나 개발 Worker를 인터넷에 노출하지 않는다.
-- 기존 `worker.cjs` 작업 서버·`scan.cjs`·로컬 Phishpedia 파이프라인은 별도 개발 경로로 보존한다. 공개 서버리스 함수에 로컬 Docker CLI·메모리 작업 폴링·메모리 신고를 그대로 올리지 않는다. VCR 이미지 게시는 blob commit 시간 초과로 완료되지 않았으며 스냅샷 준비·실브라우저·공개 API 연결 검증을 진행 중이다. 이 지침을 배포 성공의 근거로 사용하지 않는다.
+- 기존 `worker.cjs` 작업 서버·`scan.cjs`·로컬 Phishpedia 파이프라인은 별도 개발 경로로 보존한다. 공개 서버리스 함수에 로컬 Docker CLI·메모리 작업 폴링·메모리 신고를 그대로 올리지 않는다. 2026-10-31 Production에서 Sandbox 스냅샷 기반 실제 Chromium 방문·PNG 응답을 확인했다. VCR 이미지 게시는 blob commit 시간 초과로 완료되지 않았으므로 현재 공개 실행을 Docker 이미지 배포 성공으로 설명하지 않는다. 상세 증거·제한은 `docs/cloud-preview.md`를 따른다. 실제 휴대전화 카메라 촬영은 미검증이다.
 
 ## 필수 기술 제약
 
@@ -58,7 +58,7 @@
 - QR URL과 최종 URL은 구분한다. 백엔드가 실제 방문으로 확인한 `finalUrl`이 없으면 “최종 목적지 미확인”으로 표시한다.
 - `analysisScope: static`인 공개 결과는 주소 검사로 표시하며 화면·최종 목적지를 확인하지 않았음을 결과 앞부분에서 안내한다. 주소 검사만 수행한 응답에서 방문 주소나 스크린샷을 만들지 않는다. 공개 화면의 미리보기 점검 상태를 실제 촬영 실패·안전 판정으로 설명하지 않는다.
 - 공개 정적 API에서 Google 목록 미일치(`checked`, `matched: false`)는 관찰 사실로만 보존하고 최종 판정을 `unknown`으로 보류한다. 화면·동작 검사가 연결되기 전에는 이 결과를 `clear`나 정상 접속 허용으로 처리하지 않는다. 알려진 위협의 `malicious` 판정은 유지한다. 이를 신규 사칭 탐지 기능의 완성으로 설명하지 않는다.
-- 클라우드 방문이 실행된 응답은 실제 `mode`, `analysisScope`, `sandboxAnalysis` 상태에 따른다. 방문·촬영 성공 자체를 정상 판정으로 해석하지 않는다. 공개 클라우드 경로에 Phishpedia가 연결되지 않았다면 브랜드 사칭 여부는 미확인으로 남기고 최종 `unknown`을 유지한다. 알려진 위협은 방문을 생략할 수 있으며, 실제 도착 URL에서 위협을 발견한 경우에도 완료된 촬영 사실과 위험 판정을 구분한다.
+- 클라우드 방문이 실행된 응답은 실제 `mode`, `analysisScope`, `sandboxAnalysis` 상태에 따른다. 방문·촬영 성공 자체를 정상 판정으로 해석하지 않는다. 공개 Phishpedia 연동은 브라우저와 분리한 네트워크 차단 모델 VM에서 PNG와 실제 도착 도메인을 비교한다. 브랜드·도메인 불일치는 연결된 근거와 함께 `suspicious`로 표시하고, 브랜드 미식별·미설정·분석 실패는 `unknown`을 유지한다. 브랜드 일치만으로 공식 운영이나 안전을 인증하지 않는다. 알려진 위협은 방문을 생략할 수 있으며, 실제 도착 URL에서 위협을 발견한 경우에도 완료된 촬영 사실과 위험 판정을 구분한다.
 
 | 백엔드 결과 | 화면과 하단 동작 |
 | --- | --- |
@@ -91,7 +91,7 @@
 - 우리 백엔드에 필요한 검사·상태 조회·스크린샷 조회·신고 요청만 허용한다. 기본은 같은 출처의 상대 경로이며, 개발용 다른 출처는 명시된 설정으로 관리한다. API 키·비밀값을 프런트에 넣지 않는다.
 - 공개 배포 계약은 `POST /api/analyze`가 요청 안에서 정적 검사와 활성화된 클라우드 관찰을 완료하고 중첩 보고서를 반환하는 방식이다. `GET /api/health`, `GET /api/capabilities`가 설정된 제공 범위를 알린다. 클라우드 미설정·미검증 상태는 정적 검사 범위를 표시하고 임의로 방문 성공으로 보정하지 않는다. 공개 API는 인스턴스 메모리에서 검사 ID를 재조회하지 않는다.
 - 클라우드 PNG는 동일 API 응답의 `previewImage: {scanId, mimeType, base64}`로 전달한다. `scanId` 일치·PNG 형식·용량을 검사한 안전한 이미지 bytes만 Blob으로 표시하며 서버리스 메모리의 후속 이미지 조회에 의존하지 않는다. 데이터 누락·손상·다른 검사 ID는 미리보기 없음으로 처리한다.
-- 로컬 통합 계약은 `POST /api/scans` → `GET /api/scans/{id}` 폴링, PNG 조회, `POST /api/scans/{id}/reports`다. QR·수동 입력 출처와 `mode: sandbox`를 전달하고 1.2초 폴링한다. 프런트 전체 검사 제한은 90초, 공개 Vercel 함수 상한은 120초로 유지한다. 클라이언트 취소와 VM/서버 취소를 구분하고, API 실패를 다른 구성의 성공으로 자동 대체하지 않는다.
+- 로컬 통합 계약은 `POST /api/scans` → `GET /api/scans/{id}` 폴링, PNG 조회, `POST /api/scans/{id}/reports`다. QR·수동 입력 출처와 `mode: sandbox`를 전달하고 1.2초 폴링한다. 모델 추론 시간을 포함한 프런트 전체 검사 제한은 270초, 공개 Vercel 함수 상한은 300초다. 클라이언트 취소와 VM/서버 취소를 구분하고, API 실패를 다른 구성의 성공으로 자동 대체하지 않는다.
 - 외부 응답은 어댑터에서 검사해 일관된 화면용 모델로 변환한다. 다음은 **필요한 정보의 의미**이며 서버의 필드 이름·엔드포인트를 강제하는 확정 계약이 아니다.
 
 | 정보 | 프런트 처리 기준 |
@@ -196,6 +196,7 @@ tests/                      # 백엔드와 프런트의 계약·회귀 검증
 
 ## 작업과 검증
 
+- 2026-10-31 Phishpedia 공개 연동 작업은 사용자의 “테스트 하지 마” 지시에 따라 테스트·샘플 추론·기능 검증을 실행하지 않는다. 설치·배포 상태와 실제 탐지 성공·성능 검증을 구분해 보고한다. 아래 일반 검증 지침보다 해당 사용자 지시를 우선한다.
 - 실제 로컬 연동은 `.venv/bin/python scripts/run-local.py`로 실행한다. `--skip-build`는 현재 이미지가 준비된 경우에 사용한다. 기본 모드의 통제된 대상은 Worker 내부 `http://127.0.0.1:4000/demo/normal`이다. 일반 정적 서버와 통합 실행을 구분한다.
 - Worker는 `--network none`, 비루트·읽기 전용 파일시스템·리소스 제한·seccomp·Chromium 샌드박스를 유지한다. 플래그만 바꿔 격리가 검증됐다고 주장하지 않는다. 임의의 실제 로그인·결제·폼 제출은 금지한다.
 - 선택적인 `--public-preview`도 Docker 네트워크 `none`을 유지한다. loopback 프록시·표준 입출력 터널·호스트 TCP 중계기로 공개 IPv4의 80/443만 연결하며 DNS 반환 주소 검증과 숫자 IP 고정을 보존한다. TLS 인증서 검증을 끄지 않고 내부/메타데이터 주소를 허용하지 않는다. GET·HEAD 등 HTTPS 요청 정책은 브라우저 라우팅에 의존함을 독립적인 방화벽 보증과 구분한다. 기존 컨테이너의 모드·이미지가 다르면 자동 교체하지 않고 실행을 거부한다.
@@ -203,6 +204,7 @@ tests/                      # 백엔드와 프런트의 계약·회귀 검증
 - 클라우드 Worker는 `worker/cloud/Dockerfile`을 `worker/` 컨텍스트에서 빌드한다. Dockerfile 전용 ignore로 필요한 runner·분석 모듈·고정된 의존성만 이미지에 포함하고 모델 캐시·URL 입력·PNG·서버 키는 넣지 않는다. 이미지 tag의 존재를 검증 완료로 해석하지 말고 VCR의 `@sha256:` digest를 서버 설정에 고정한다.
 - 공개 클라우드 소스는 `QR_GUARD_CLOUD_WORKER_IMAGE` 또는 `QR_GUARD_CLOUD_WORKER_SNAPSHOT` 중 정확히 하나만 설정한다. 둘을 함께 설정하면 구성을 거부한다. 공통 게이트 `QR_GUARD_CLOUD_WORKER_VERIFIED=true`는 실제 선택한 소스에서 VM 방화벽·IPv6 차단·Chromium 샌드박스·PNG 회수를 검증한 후에만 설정한다. 플래그만 켜서 네트워크 검증을 대신하지 않는다. Google 키·Vercel SDK 인증·OIDC 자격 증명은 API 서버에만 두고 VM에 전달하지 않는다.
 - 스냅샷에는 runner·분석 모듈·고정 의존성만 준비하고 키·검사 URL·결과·PNG는 넣지 않는다. 소스 스냅샷은 요청 VM과 구분해 보존하며 요청 정리에는 `delete_orphan_snapshots=False`를 사용한다. 원본 만료 정책을 실제로 확인하고, 요청 VM은 `persistent=False`·45초·2GiB 제한과 같은 네트워크 검증을 적용한다.
+- 공개 모델 실행 소스는 별도의 서버 설정 `QR_GUARD_PHISHPEDIA_SNAPSHOT`을 사용한다. 모델 가중치·기준 로고·특징 캐시와 고정 코드를 준비한 원본만 저장하며 브라우저 VM과 섞지 않는다. 모델 요청 VM에는 `deny-all` 네트워크 정책을 강제하고 PNG·실제 최종 URL·검사 ID만 임시 파일로 전달한다. 키·SDK 인증을 전달하지 않고 제한된 JSON을 회수한 뒤 VM을 정리하며 원본 스냅샷은 보존한다.
 - 요청별 VM에는 검증된 사설망·메타데이터 차단 정책을 강제한다. 현재 플랫폼의 서브넷 규칙과 별도로 VM의 모든 IPv6 인터페이스를 비활성화하고 읽어서 확인한 뒤 Chromium을 실행한다. URL·DNS 검사는 추가 방어이며 DNS 재바인딩의 네트워크 경계를 대신하지 않는다. runner의 `chromiumSandbox: true`를 유지하고 이를 끄는 우회로 성공을 만들지 않는다.
 - VM에서는 `/tmp/qr-input.json`을 읽는 `node /app/cloud/run.cjs`를 명시적으로 실행한다. Docker 이미지의 ENTRYPOINT/CMD가 자동 실행된다고 가정하지 않는다. 제한된 결과 JSON·PNG를 회수한 후 성공·오류·취소 경로 모두에서 VM을 정리한다. 요청 URL이나 PNG를 명령 인자·표준 출력·로그에 넣지 않고 임시 파일과 API 응답으로만 취급한다. 관찰 runner의 기본 실행 제한은 20초이며 이미지 부팅·회수와 함수 전체 제한을 구분한다.
 - Vercel 공개 클라우드 관찰과 로컬 Docker 통합 실행을 구분한다. 공개 API의 실제 HTTPS 요청·응답과 배포 상태를 확인하기 전에는 배포 완료라고 보고하지 않는다. 공개 Google 키는 서버 환경 변수의 민감한 값으로 관리하고 빌드 출력·업로드 소스·로그에서 제외한다. `.vercelignore`에는 공개 API의 소스 의존성만 포함하며 Worker 이미지 또는 스냅샷은 별도로 준비한다.

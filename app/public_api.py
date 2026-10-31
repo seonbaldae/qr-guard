@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import field_validator
 
 from app.config import configured_origin
+from app.cloud_phishpedia import CloudBrandAnalysis, CloudPhishpediaAnalyzer, CloudPhishpediaError
 from app.cloud_worker import CloudBrowserResult, CloudWorkerClient, CloudWorkerError, _decode_png, _public_url
 from app.models import (
     Evidence, ProviderResult, SandboxResult, ScanReport, ScanRequest, ScreenshotState, Signal,
@@ -28,13 +29,14 @@ from app.static_adapter import ThreatCheck, analyze_static
 
 MAX_REQUEST_BYTES = 16 * 1024
 LOOKUP_TIMEOUT_SECONDS = 12
-ANALYSIS_TIMEOUT_SECONDS = 80
+ANALYSIS_TIMEOUT_SECONDS = 230
 SCOPE_NOTICE = "현재는 주소만 검사하며 사이트 화면은 확인하지 않았습니다."
 WORKER_NOTICE = "Docker 미리보기는 점검 중입니다."
 REPORT_NOTICE = "신고 접수는 준비 중입니다."
+BRAND_UNAVAILABLE_NOTICE = "브랜드 사칭 판별 모델은 연결되지 않아 화면이 정상처럼 보여도 사칭 여부를 확정할 수 없습니다."
 CLOUD_LIMITATIONS = [
     "초기 화면과 짧은 관찰 구간만 확인했으며 로그인·입력·폼 제출은 수행하지 않았습니다.",
-    "브랜드 사칭 판별 모델은 연결되지 않아 화면이 정상처럼 보여도 사칭 여부를 확정할 수 없습니다.",
+    BRAND_UNAVAILABLE_NOTICE,
     "검사 결과는 안전을 보증하지 않습니다.",
 ]
 _CLOUD_ERROR_CODES = {
@@ -43,12 +45,13 @@ _CLOUD_ERROR_CODES = {
 }
 
 
-def capabilities(cloud_worker=None):
+def capabilities(cloud_worker=None, brand_analyzer=None):
     enabled = bool(cloud_worker is not None and cloud_worker.enabled)
     return {
         "scanTransport": "direct", "scanMode": "sandbox" if enabled else "static",
         "analysisScope": "sandbox" if enabled else "static",
         "previewAvailable": enabled, "reportAvailable": False,
+        "brandAnalysisAvailable": bool(enabled and brand_analyzer is not None and brand_analyzer.enabled),
     }
 
 
@@ -61,6 +64,13 @@ def configured_cloud_worker():
                                  snapshot_id=os.getenv("QR_GUARD_CLOUD_WORKER_SNAPSHOT"))
     except ValueError:
         return CloudWorkerClient(None)
+
+
+def configured_brand_analyzer():
+    try:
+        return CloudPhishpediaAnalyzer(os.getenv("QR_GUARD_PHISHPEDIA_SNAPSHOT"))
+    except ValueError:
+        return CloudPhishpediaAnalyzer(None)
 
 
 async def _static_lookup(url, check, timeout=LOOKUP_TIMEOUT_SECONDS):
@@ -181,6 +191,78 @@ async def _cloud_report(worker, scan_id, url, check, deadline):
         ), [], None
 
 
+async def _brand_report(analyzer, scan_id, sandbox, verdict, png, evidence, deadline):
+    """Inference failure never discards a valid screenshot or grants access."""
+    if verdict.level == "malicious":
+        return {"engine": "phishpedia", "status": "skipped", "reason": "known_malicious"}, verdict
+    if not analyzer.enabled:
+        return {"engine": "phishpedia", "status": "not_configured"}, verdict
+
+    # The browser's own statement is still correct for that process, but an
+    # independently running model must not be described as never connected.
+    stale_notices = {
+        BRAND_UNAVAILABLE_NOTICE,
+        "로그인·입력·폼 제출과 브랜드 모델 분석은 수행하지 않았습니다.",
+    }
+    sandbox.limitations = [item for item in sandbox.limitations if item not in stale_notices]
+    if sandbox.status != "completed" or not png or not sandbox.final_url:
+        sandbox.limitations.append("화면과 실제 도착 주소의 관찰을 완료하지 못해 브랜드 로고 분석을 생략했습니다.")
+        verdict.limitations = list(sandbox.limitations)
+        return {"engine": "phishpedia", "status": "skipped", "reason": "browser_incomplete"}, verdict
+    try:
+        remaining = max(0.001, deadline - asyncio.get_running_loop().time())
+        async with asyncio.timeout(remaining):
+            brand = await analyzer.analyze(scan_id, sandbox.final_url, png)
+        # Validate injected adapters with the same strict wire schema.
+        brand = CloudBrandAnalysis.model_validate(brand.model_dump(by_alias=True))
+        from app.cloud_phishpedia import BrandEnvelope, validate_brand_result
+        brand = validate_brand_result(BrandEnvelope(scan_id=scan_id, final_url=sandbox.final_url,
+                                                   brand_analysis=brand), scan_id, sandbox.final_url)
+    except Exception as error:
+        code = "phishpedia_timeout" if isinstance(error, TimeoutError) else getattr(error, "code", "phishpedia_failed")
+        if code not in {"phishpedia_timeout", "phishpedia_failed", "phishpedia_unreachable",
+                        "phishpedia_invalid_response", "phishpedia_result_mismatch", "phishpedia_invalid_input"}:
+            code = "phishpedia_failed"
+        sandbox.limitations.append("Phishpedia 브랜드 로고 분석을 완료하지 못했습니다.")
+        verdict.reasons = ["브랜드 로고 분석을 완료하지 못해 사칭 여부의 판단을 보류했습니다."]
+        verdict.limitations = list(sandbox.limitations)
+        return {"engine": "phishpedia", "status": "failed", "errorCode": code}, verdict
+
+    limitations = [
+        "Phishpedia는 기준 자료에 포함된 로고의 시각적 유사도를 비교하며 모든 사칭 사이트를 탐지하지는 못합니다.",
+        "로고 유사도와 도메인 비교는 공식 운영 인증이나 실제 정보 유출의 증명이 아닙니다.",
+    ]
+    sandbox.limitations = list(dict.fromkeys([*sandbox.limitations, *limitations]))
+    kind = {"brand_domain_inconsistency": "brand_domain_mismatch",
+            "brand_domain_match": "brand_domain_match", "brand_unidentified": "brand_unidentified"}[brand.signal]
+    mismatch = brand.signal == "brand_domain_inconsistency"
+    if mismatch:
+        summary = f"Phishpedia가 식별한 {brand.candidate_brand} 로고 후보의 기준 도메인과 실제 도착 도메인이 다릅니다."
+    elif brand.signal == "brand_domain_match":
+        summary = f"Phishpedia가 식별한 {brand.candidate_brand} 로고 후보의 기준 도메인 범위에 실제 도착 도메인이 포함됩니다."
+    else:
+        summary = "Phishpedia의 기준 로고 자료에서 신뢰 기준을 충족하는 브랜드 후보를 식별하지 못했습니다."
+    evidence_id = f"ev-phishpedia-{scan_id}-brand"
+    evidence.append(Evidence(
+        id=evidence_id, kind=kind, source="phishpedia", observed_at=datetime.now(timezone.utc), summary=summary,
+        data={"candidateBrand": brand.candidate_brand, "observedDomain": brand.domain_comparison.actual_host,
+              "referenceDomains": ", ".join(brand.reference_domains), "similarity": brand.raw_similarity,
+              "detectedLogoCount": brand.detected_logo_count, "domainComparison": brand.domain_comparison.status},
+    ))
+    sandbox.signals.append(Signal(
+        id=f"sig-phishpedia-{scan_id}-brand", kind=kind, source="phishpedia",
+        severity="high" if mismatch else "info", summary=summary, evidence_ids=[evidence_id],
+    ))
+    if mismatch:
+        verdict = VerdictResult(level="suspicious", reasons=[summary, "브랜드 사칭이 의심되어 사이트 연결을 제공하지 않습니다."],
+                                evidence_ids=[evidence_id], limitations=list(sandbox.limitations))
+    else:
+        # Even a matching logo/domain pair cannot establish a site's safety.
+        verdict = VerdictResult(level="unknown", reasons=[summary, "이 결과만으로 사이트의 안전 여부를 확정할 수 없습니다."],
+                                evidence_ids=[*verdict.evidence_ids, evidence_id], limitations=list(sandbox.limitations))
+    return {**brand.model_dump(mode="json", by_alias=True), "evidenceIds": [evidence_id]}, verdict
+
+
 class PublicScanRequest(ScanRequest):
     @field_validator("url")
     @classmethod
@@ -277,13 +359,13 @@ class PublicBoundaryMiddleware:
 
 
 def create_public_app(*, threat_check: ThreatCheck | None = None,
-                      allowed_origins: tuple[str, ...] | None = None, cloud_worker=None) -> FastAPI:
+                      allowed_origins: tuple[str, ...] | None = None, cloud_worker=None, brand_analyzer=None) -> FastAPI:
     check = threat_check or check_safe_browsing
     if allowed_origins is None:
         allowed_origins = tuple(value.strip() for value in
                                 os.getenv("QR_GUARD_PUBLIC_ORIGINS", "").split(",") if value.strip())
     allowed_origins = tuple(configured_origin(value) for value in allowed_origins)
-    application = FastAPI(title="QR Guard Public API", version="0.3.0",
+    application = FastAPI(title="QR Guard Public API", version="0.4.0",
                           docs_url=None, redoc_url=None, openapi_url=None)
     if allowed_origins:
         application.add_middleware(CORSMiddleware, allow_origins=list(allowed_origins),
@@ -293,6 +375,9 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
 
     def current_worker():
         return cloud_worker if cloud_worker is not None else configured_cloud_worker()
+
+    def current_brand_analyzer():
+        return brand_analyzer if brand_analyzer is not None else configured_brand_analyzer()
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(_request, exc):
@@ -305,11 +390,11 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
 
     @application.get("/api/health")
     async def health():
-        return {"status": "ok", **capabilities(current_worker())}
+        return {"status": "ok", **capabilities(current_worker(), current_brand_analyzer())}
 
     @application.get("/api/capabilities")
     async def get_capabilities():
-        return capabilities(current_worker())
+        return capabilities(current_worker(), current_brand_analyzer())
 
     @application.post("/api/analyze")
     async def analyze(request: PublicScanRequest):
@@ -349,6 +434,8 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
         elif cloud_enabled:
             sandbox, verdict, cloud_evidence, png = await _cloud_report(worker, scan_id, request.url, check, deadline)
             evidence.extend(cloud_evidence)
+        brand_result, verdict = await _brand_report(current_brand_analyzer(), scan_id, sandbox, verdict,
+                                                     png, evidence, deadline)
         report = ScanReport(
             scan_id=scan_id, status="completed", mode="sandbox" if cloud_enabled else "static", requested_url=request.url,
             static_analysis=static, evidence=evidence, verdict=verdict, updated_at=datetime.now(timezone.utc),
@@ -358,7 +445,7 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
         # statistics are unknown, not a fabricated zero or a successful receipt.
         report.update(reportCount=None, isReported=None, reportedByUser=None,
                       previewAvailable=bool(png), reportAvailable=False,
-                      analysisScope="sandbox" if cloud_enabled else "static")
+                      analysisScope="sandbox" if cloud_enabled else "static", brandAnalysis=brand_result)
         if png is not None:
             report["previewImage"] = {"scanId": scan_id, "mimeType": "image/png", "base64": base64.b64encode(png).decode("ascii")}
         return report
