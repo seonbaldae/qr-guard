@@ -27,7 +27,7 @@ mkdir -p models
 unzip -q models/expand_targetlist.zip -d models/expand_targetlist
 if [ -d models/expand_targetlist/expand_targetlist ]; then
   mv models/expand_targetlist/expand_targetlist/* models/expand_targetlist/
-  rmdir models/expand_targetlist/expand_targetlist
+  rm -rf models/expand_targetlist/expand_targetlist
 fi
 # Model installation includes precomputing the protected reference logo features.
 .venv/bin/python -u -c 'from phishpedia import PhishpediaWrapper; PhishpediaWrapper()'

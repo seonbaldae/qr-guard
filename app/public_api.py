@@ -18,7 +18,9 @@ from fastapi.responses import JSONResponse
 from pydantic import field_validator
 
 from app.config import configured_origin
-from app.cloud_phishpedia import CloudBrandAnalysis, CloudPhishpediaAnalyzer, CloudPhishpediaError
+from app.cloud_phishpedia import (
+    BrandEnvelope, CloudBrandAnalysis, CloudPhishpediaAnalyzer, validate_brand_result,
+)
 from app.cloud_worker import CloudBrowserResult, CloudWorkerClient, CloudWorkerError, _decode_png, _public_url
 from app.models import (
     Evidence, ProviderResult, SandboxResult, ScanReport, ScanRequest, ScreenshotState, Signal,
@@ -215,7 +217,6 @@ async def _brand_report(analyzer, scan_id, sandbox, verdict, png, evidence, dead
             brand = await analyzer.analyze(scan_id, sandbox.final_url, png)
         # Validate injected adapters with the same strict wire schema.
         brand = CloudBrandAnalysis.model_validate(brand.model_dump(by_alias=True))
-        from app.cloud_phishpedia import BrandEnvelope, validate_brand_result
         brand = validate_brand_result(BrandEnvelope(scan_id=scan_id, final_url=sandbox.final_url,
                                                    brand_analysis=brand), scan_id, sandbox.final_url)
     except Exception as error:
@@ -435,7 +436,7 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
             sandbox, verdict, cloud_evidence, png = await _cloud_report(worker, scan_id, request.url, check, deadline)
             evidence.extend(cloud_evidence)
         brand_result, verdict = await _brand_report(current_brand_analyzer(), scan_id, sandbox, verdict,
-                                                     png, evidence, deadline)
+                                                    png, evidence, deadline)
         report = ScanReport(
             scan_id=scan_id, status="completed", mode="sandbox" if cloud_enabled else "static", requested_url=request.url,
             static_analysis=static, evidence=evidence, verdict=verdict, updated_at=datetime.now(timezone.utc),
