@@ -13,6 +13,7 @@ git fetch -q --depth 1 origin d030779aad0aebd224f2cb60ed1c1603a8efcb1f
 git checkout -q --detach FETCH_HEAD
 git apply /tmp/qr-phishpedia/logo_matching.patch
 cp /tmp/qr-phishpedia/analyze-brand.py /tmp/qr-phishpedia/run-phishpedia.py .
+cp /tmp/qr-phishpedia/cache-phishpedia.py qr-cache-reference.py
 uv python install 3.10.22
 uv venv --seed --python 3.10.22 .venv
 uv pip install --python .venv/bin/python 'torch==2.2.2+cpu' 'torchvision==0.17.2+cpu' --index-url https://download.pytorch.org/whl/cpu
@@ -30,7 +31,7 @@ if [ -d models/expand_targetlist/expand_targetlist ]; then
   rm -rf models/expand_targetlist/expand_targetlist
 fi
 # Model installation includes precomputing the protected reference logo features.
-.venv/bin/python -u -c 'from phishpedia import PhishpediaWrapper; PhishpediaWrapper()'
+.venv/bin/python -u qr-cache-reference.py --root /opt/phishpedia --batch-size 8 --threads 4
 .venv/bin/python - <<'PY'
 import hashlib, json, pathlib, subprocess
 root = pathlib.Path('/opt/phishpedia')
