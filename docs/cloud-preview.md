@@ -2,15 +2,16 @@
 
 ## 현재 상태
 
-2026-10-31 Production 배포 `dpl_6yyy5mB1ydQqDPATJswgh6oeQEzK`가 `READY`이며
-[공개 서비스](https://qr-guard-five.vercel.app/)에서 실제 Chromium 방문·PNG 응답을 확인했습니다.
+2026-10-31 Phishpedia 연동 Production 배포 `dpl_EuMfggrL7Jn5xiGEd8uFG5eP8EdK`가 `READY`이며
+[공개 서비스](https://qr-guard-five.vercel.app/)에 모델 코드와 서버 전용 스냅샷 설정을 반영했습니다.
+앞선 `dpl_6yyy5mB1ydQqDPATJswgh6oeQEzK`에서 실제 Chromium 방문·PNG 응답을 확인했습니다.
 현재 실행 소스는 같은 runner와 고정 의존성을 관리형 VM에 준비한 **Sandbox 스냅샷**입니다.
 VCR 이미지 게시는 blob commit 시간 초과로 아직 완료되지 않았습니다. 현재 성공은 스냅샷 VM
 경로에 대한 것으로, Docker 엔진 실행이나 VCR 이미지 배포 성공을 뜻하지 않습니다.
 
 기존 공개 주소의 정적 API 배포·Google 실제 조회·판단 보류 검증 이력은
 [공개 배포 기록](public-deployment.md)에 유지합니다. 기존 로컬 Docker·Phishpedia 경로는
-별도로 보존합니다. 공개 Phishpedia 모델 연동은 별도 네트워크 차단 스냅샷으로 준비·배포 중이며,
+별도로 보존합니다. 공개 Phishpedia 모델 연동은 별도 네트워크 차단 스냅샷으로 구성해 배포했으며,
 기존 브라우저 스냅샷이 해당 모델을 포함한다고 가정하지 않습니다. 사용자의 “테스트 하지 마”
 요청에 따라 이번 모델 연동의 테스트·샘플 추론·기능 검증은 실행하지 않습니다.
 
@@ -151,7 +152,7 @@ node scripts/prepare-vercel.mjs --public --cloud-preview
 ## Phishpedia 모델 설치 진행
 
 관리형 Ubuntu 26 VM의 `/opt/phishpedia/.venv`에 uv로 Python `3.10.22`를 준비하고
-다음 CPU 환경을 설치했습니다. 모델 설치·캐시 준비 상태이며 실제 공개 배포 완료를 뜻하지 않습니다.
+다음 CPU 환경을 설치하고 Production 배포를 완료했습니다. 실제 사이트 탐지 결과는 테스트하지 않았습니다.
 
 - Phishpedia 소스: `d030779aad0aebd224f2cb60ed1c1603a8efcb1f`와 저장소의 로고 매칭 패치
 - Detectron2 소스: `92ae9f0b92aba5867824b4f12aa06a22a60a45d3`
@@ -160,12 +161,14 @@ node scripts/prepare-vercel.mjs --public --cloud-preview
 - 기준 자료: Naver를 포함한 브랜드 271개와 로고 2,996개
 
 `worker/cloud/setup-phishpedia.sh`와 `worker/cloud/cache-phishpedia.py`가 이 설치와
-기준 특징 캐시 생성을 위한 재현용 준비 코드입니다. 현재 batch 8·CPU threads 4로
-기준 로고의 배포용 특징을 생성하고 있습니다. 고정 소스의 전처리, GroupNorm과 행별 L2
+기준 특징 캐시 생성을 위한 재현용 준비 코드입니다. batch 8·CPU threads 4로
+기준 로고 2,996개의 배포용 특징을 생성했습니다. 고정 소스의 전처리, GroupNorm과 행별 L2
 정규화를 따르지만 배치 CPU 연산의 부동소수점 ULP·비트 단위 동일성은 검증하지 않았습니다.
 이 준비는 사용자 페이지나 샘플에 대한 탐지 테스트가 아닙니다.
 
-모델 요청은 별도의 `deny-all` VM에서 4 vCPU·8GiB·수명 180초로 실행하도록 준비합니다.
+모델 원본은 `snap_xGVPf1MNcMzM6HkOKbw43GKIaNb2`이며 만료값 0으로 생성해 서버 설정에 고정했습니다.
+생성 API 상태는 `created`, 파일 시스템 크기는 2,388,726,015 bytes입니다.
+모델 요청은 별도의 `deny-all` VM에서 4 vCPU·8GiB·수명 180초로 실행하도록 구성했습니다.
 모델 프로세스 제한은 120초, 모델 처리 전체 제한은 150초, 공개 API 전체 제한은 230초이며,
 프런트 270초·Vercel Function 300초 제한과 구분합니다. 준비한 모델 원본 스냅샷에는 입력
 URL·PNG·분석 결과·자격 증명을 넣지 않습니다. 사용자 지시에 따라 이번 모델 연동의
@@ -176,7 +179,7 @@ URL·PNG·분석 결과·자격 증명을 넣지 않습니다. 사용자 지시�
 클라우드 경로는 초기 로딩 후 짧은 관찰을 수행하고 DOM·네트워크·페이지 이동 메타데이터를
 수집합니다. 폼을 클릭하거나 실제 계정·카드·OTP 정보를 입력·전송하지 않습니다.
 
-**공개 Phishpedia 모델 연동은 준비·배포 중이며 실제 탐지는 미검증입니다.** 서버 전용
+**공개 Phishpedia 모델 설치·코드 배포는 완료했으며 실제 탐지는 미검증입니다.** 서버 전용
 `QR_GUARD_PHISHPEDIA_SNAPSHOT`으로 고정 코드·모델 가중치·기준 로고·특징 캐시를 준비한
 원본을 선택합니다. 요청별 모델 VM은 `deny-all` 네트워크에서 현재 검사 ID·PNG·실제 최종
 URL만 처리하고 정리되며, 원본에는 검사 데이터나 자격 증명을 저장하지 않습니다.

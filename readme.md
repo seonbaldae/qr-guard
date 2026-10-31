@@ -16,9 +16,9 @@ QR에 담긴 주소를 사용자 기기에서 바로 열지 않고 먼저 검사
 
 ## 다른 휴대전화에서 사용할 공개 서비스
 
-[QR Guard 열기](https://qr-guard-five.vercel.app/). 2026-10-31 Vercel Production `dpl_6yyy5mB1ydQqDPATJswgh6oeQEzK`가 `READY`이며, 공개 HTTPS API에서 Sandbox 스냅샷 기반 실제 방문·PNG 회수를 확인했습니다. Google 조회도 실제 연결됐습니다. 신고는 공유 저장소 미연결로 준비 중입니다.
+[QR Guard 열기](https://qr-guard-five.vercel.app/). 2026-10-31 Phishpedia 연동 Production `dpl_EuMfggrL7Jn5xiGEd8uFG5eP8EdK`가 `READY`입니다. 앞선 미리보기 배포에서 공개 HTTPS API의 실제 방문·PNG 회수와 Google 조회를 확인했습니다. 이번 모델 연동은 사용자 요청에 따라 탐지 테스트를 실행하지 않았습니다. 신고는 공유 저장소 미연결로 준비 중입니다.
 
-공개 `example.com` 검사에서 약 8.9초 후 실제 최종 URL과 같은 검사 ID의 390×844 PNG를 받았고 이미지 디코딩도 확인했습니다. 브랜드 모델은 아직 연결되지 않아 최종 판정은 `unknown`입니다. Google 공식 피싱 테스트 주소는 약 1.8초 후 `malicious`로 응답하고 격리 방문을 생략해 PNG를 제공하지 않았습니다. 현재 검증은 [클라우드 미리보기 기록](docs/cloud-preview.md), 앞서 완료한 정적 검사 배포 이력은 [공개 배포 검증](docs/public-deployment.md)에 구분해 기록합니다.
+앞선 미리보기 배포의 공개 `example.com` 검사에서 약 8.9초 후 실제 최종 URL과 같은 검사 ID의 390×844 PNG를 받았고 이미지 디코딩도 확인했습니다. 당시 브랜드 모델은 미연동이어서 최종 판정은 `unknown`이었습니다. Google 공식 피싱 테스트 주소는 약 1.8초 후 `malicious`로 응답하고 격리 방문을 생략해 PNG를 제공하지 않았습니다. 모델 설치·배포와 이전 검증은 [클라우드 기록](docs/cloud-preview.md), 정적 검사 배포 이력은 [공개 배포 검증](docs/public-deployment.md)에 구분해 기록합니다.
 
 | 구분 | 기존 공개 정적 배포 | 현재 공개 클라우드 미리보기 | 로컬 Docker 통합 구성 |
 | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ QR에 담긴 주소를 사용자 기기에서 바로 열지 않고 먼저 검사
 
 로컬 Docker 실행 코드와 수정 중인 기존 Worker 작업 서버를 공개 API 함수에 그대로 넣지 않습니다. 클라우드용 이미지 또는 준비한 스냅샷으로 공개 API가 VM을 생성하고 결과를 회수한 뒤 정리합니다. 스냅샷 경로는 Docker 엔진을 실행하는 방식이 아닙니다. PNG는 검사 ID·MIME·시그니처·용량을 확인하는 `previewImage`로 전달해 후속 이미지 조회용 메모리 저장소에 의존하지 않습니다. 클라우드 VM에서 사설망·메타데이터 차단과 IPv6 비활성화 확인을 마친 뒤 Chromium을 실행하며, 키·SDK 자격 증명은 VM에 넘기지 않습니다. 재배포 절차와 현재 검증 상태는 [클라우드 미리보기 구성](docs/cloud-preview.md)을 참고하세요.
 
-공개 Phishpedia 연동은 준비·배포 중입니다. 브라우저가 얻은 PNG를 별도의 네트워크 차단 모델 VM에서 분석하고 식별 브랜드의 기준 도메인과 실제 도착 도메인을 비교합니다. 근거가 있는 불일치는 `suspicious`, 브랜드 미식별·미설정·분석 실패는 `unknown`으로 처리합니다. 브랜드 일치만으로 공식 운영이나 안전을 인증하지 않으며, 알려진 Google 위협의 위험 판정은 유지합니다. 사용자의 요청으로 이번 연동의 테스트·샘플 추론·기능 검증은 실행하지 않습니다. 기존 공개 방문·PNG 검증 이력은 모델 탐지 성공을 뜻하지 않습니다.
+공개 Phishpedia 연동 코드와 모델 스냅샷 설정을 배포했습니다. 브라우저가 얻은 PNG를 별도의 네트워크 차단 모델 VM에서 분석하고 식별 브랜드의 기준 도메인과 실제 도착 도메인을 비교합니다. 근거가 있는 불일치는 `suspicious`, 브랜드 미식별·미설정·분석 실패는 `unknown`으로 처리합니다. 브랜드 일치만으로 공식 운영이나 안전을 인증하지 않으며, 알려진 Google 위협의 위험 판정은 유지합니다. 사용자의 요청으로 이번 연동의 테스트·샘플 추론·기능 검증은 실행하지 않았습니다. 기존 공개 방문·PNG 검증 이력은 모델 탐지 성공을 뜻하지 않습니다.
 
 휴대전화에서는 HTTPS 주소로 접속해야 카메라 권한을 사용할 수 있습니다. HTTPS만으로 모든 브라우저의 QR 해독 지원이 생기지는 않습니다. `BarcodeDetector`의 QR 지원 여부를 확인하며 미지원 환경에는 주소 직접 입력을 제공합니다. 실제 하드웨어 카메라 촬영은 별도 검증 대상입니다.
 
@@ -144,7 +144,7 @@ Google 키는 Vercel 서버 환경 변수 `GOOGLE_SAFE_BROWSING_API_KEY`로만 �
 
 Phishpedia는 별도의 서버 전용 `QR_GUARD_PHISHPEDIA_SNAPSHOT=<모델을 준비한 snap_ ID>`로 설정합니다. 원본에는 고정 코드·모델 가중치·기준 로고·특징 캐시만 담고 검사 URL·PNG·결과·자격 증명은 담지 않습니다. 요청별 모델 VM은 `deny-all` 네트워크에서 PNG와 실제 최종 URL을 분석하며 브라우저 VM의 외부 접속 권한을 공유하지 않습니다. 모델 설정이나 배포 완료와 실제 탐지 정확도 검증은 별개입니다.
 
-현재 모델 설치는 관리형 Ubuntu 26 VM에서 Python 3.10.22와 고정 CPU 의존성을 준비하고 공식 모델 자료 5개를 받은 단계입니다. Naver를 포함한 기준 브랜드 271개·로고 2,996개에 대해 배포용 특징 캐시를 생성하고 있습니다. 재현용 준비 코드는 `worker/cloud/setup-phishpedia.sh`와 `worker/cloud/cache-phishpedia.py`입니다. 이는 사용자 페이지나 샘플의 탐지 테스트가 아니며, 실제 배포·탐지 성공은 아직 확인하지 않았습니다. 설치 버전과 자원 제한은 [모델 설치 진행 기록](docs/cloud-preview.md#phishpedia-모델-설치-진행)을 참고하세요.
+관리형 Ubuntu 26 VM에 Python 3.10.22·고정 CPU 의존성·공식 모델 자료 5개를 설치하고 Naver를 포함한 기준 브랜드 271개·로고 2,996개의 특징 캐시를 생성했습니다. 원본 스냅샷은 서버 설정에 고정했습니다. 재현용 준비 코드는 `worker/cloud/setup-phishpedia.sh`와 `worker/cloud/cache-phishpedia.py`입니다. 설치·Production 배포는 완료했으며 실제 탐지 결과는 테스트하지 않았습니다. 설치 버전과 자원 제한은 [모델 설치 기록](docs/cloud-preview.md#phishpedia-모델-설치-진행)을 참고하세요.
 
 공개 배포 구성을 로컬에서 재현하려면 두 터미널에서 실행합니다.
 
