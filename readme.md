@@ -144,6 +144,8 @@ Google 키는 Vercel 서버 환경 변수 `GOOGLE_SAFE_BROWSING_API_KEY`로만 �
 
 Phishpedia는 별도의 서버 전용 `QR_GUARD_PHISHPEDIA_SNAPSHOT=<모델을 준비한 snap_ ID>`로 설정합니다. 원본에는 고정 코드·모델 가중치·기준 로고·특징 캐시만 담고 검사 URL·PNG·결과·자격 증명은 담지 않습니다. 요청별 모델 VM은 `deny-all` 네트워크에서 PNG와 실제 최종 URL을 분석하며 브라우저 VM의 외부 접속 권한을 공유하지 않습니다. 모델 설정이나 배포 완료와 실제 탐지 정확도 검증은 별개입니다.
 
+현재 모델 설치는 관리형 Ubuntu 26 VM에서 Python 3.10.22와 고정 CPU 의존성을 준비하고 공식 모델 자료 5개를 받은 단계입니다. Naver를 포함한 기준 브랜드 271개·로고 2,996개에 대해 배포용 특징 캐시를 생성하고 있습니다. 재현용 준비 코드는 `worker/cloud/setup-phishpedia.sh`와 `worker/cloud/cache-phishpedia.py`입니다. 이는 사용자 페이지나 샘플의 탐지 테스트가 아니며, 실제 배포·탐지 성공은 아직 확인하지 않았습니다. 설치 버전과 자원 제한은 [모델 설치 진행 기록](docs/cloud-preview.md#phishpedia-모델-설치-진행)을 참고하세요.
+
 공개 배포 구성을 로컬에서 재현하려면 두 터미널에서 실행합니다.
 
 ```sh
