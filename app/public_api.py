@@ -103,7 +103,7 @@ def _cloud_observations(result, scan_id):
         add("dom_observation", f"비밀번호 입력 필드 {dom.password_field_count}개를 관찰했습니다.", {
             "passwordFieldCount": dom.password_field_count, "formCount": len(dom.forms),
             "sensitiveFieldTypeCount": len(dom.sensitive_field_types), "pageTitle": dom.page_title,
-        }, "medium" if dom.password_field_count else "info")
+        })
     if result.network_analysis is not None:
         network = result.network_analysis
         add("network_observation", f"네트워크 요청 {network.request_count}건과 정책 차단 {network.blocked_request_count}건을 관찰했습니다.", {
@@ -258,10 +258,68 @@ async def _brand_report(analyzer, scan_id, sandbox, verdict, png, evidence, dead
         verdict = VerdictResult(level="suspicious", reasons=[summary, "브랜드 사칭이 의심되어 사이트 연결을 제공하지 않습니다."],
                                 evidence_ids=[evidence_id], limitations=list(sandbox.limitations))
     else:
-        # Even a matching logo/domain pair cannot establish a site's safety.
+        # This observation is provisional until the complete scan is correlated.
         verdict = VerdictResult(level="unknown", reasons=[summary, "이 결과만으로 사이트의 안전 여부를 확정할 수 없습니다."],
                                 evidence_ids=[*verdict.evidence_ids, evidence_id], limitations=list(sandbox.limitations))
     return {**brand.model_dump(mode="json", by_alias=True), "evidenceIds": [evidence_id]}, verdict
+
+
+def _final_verdict(scan_id, static, sandbox, brand, verdict, png, evidence):
+    """A successful scan with no risk signals can finish as no known threat."""
+    if verdict.level in {"malicious", "suspicious"}:
+        return verdict
+
+    initial_checked = bool(static.status == "completed" and static.providers and all(
+        provider.status == "checked" and provider.matched is False for provider in static.providers
+    ))
+    final_lookup = next((item for item in evidence
+                         if item.id == f"ev-cloud-{scan_id}-final-provider"
+                         and item.kind == "final_url_threat_lookup"
+                         and item.source == "google_safe_browsing"), None)
+    final_checked = bool(final_lookup is not None and final_lookup.data
+                         and final_lookup.data.get("status") == "checked"
+                         and final_lookup.data.get("matched") is False)
+    browser_complete = bool(
+        sandbox.status == "completed" and sandbox.final_url and png
+        and sandbox.http_status is not None and 200 <= sandbox.http_status < 400
+        and sandbox.screenshot.status == "ready" and sandbox.screenshot.available
+        and sandbox.error_code is None and sandbox.screenshot.error_code is None
+    )
+    brand_complete = bool(brand.get("status") == "completed" and brand.get("signal") in {
+        "brand_domain_match", "brand_unidentified",
+    })
+    # Observation signals are always present. A completed logo search without a
+    # candidate is a negative observation, not a failed or skipped model run.
+    risks = [signal for signal in [*static.signals, *sandbox.signals]
+             if signal.severity in {"low", "medium", "high"}]
+    if risks:
+        return VerdictResult(
+            level="unknown", reasons=list(dict.fromkeys(signal.summary for signal in risks)),
+            evidence_ids=list(dict.fromkeys(identifier for signal in risks for identifier in signal.evidence_ids)),
+            limitations=list(sandbox.limitations),
+        )
+    if not (initial_checked and final_checked and browser_complete and brand_complete):
+        reasons = []
+        if not initial_checked:
+            reasons.append("원래 주소의 위협 정보 조회를 완료하지 못해 판단을 보류했습니다.")
+        if browser_complete and not final_checked:
+            reasons.append("실제 도착 주소의 위협 정보 조회를 완료하지 못해 판단을 보류했습니다.")
+        return verdict.model_copy(update={"reasons": reasons or verdict.reasons})
+
+    complete_id = f"ev-cloud-{scan_id}-completed-checks"
+    evidence.append(Evidence(
+        id=complete_id, kind="inspection_complete", source="correlation_engine",
+        observed_at=datetime.now(timezone.utc),
+        summary="최초·최종 주소의 위협 조회, 격리 방문과 브랜드 분석을 완료했고 위험 신호를 발견하지 못했습니다.",
+        data={"initialThreatLookupComplete": True, "finalThreatLookupComplete": True,
+              "browserComplete": True, "brandAnalysisComplete": True,
+              "brandIdentified": brand.get("signal") == "brand_domain_match"},
+    ))
+    return VerdictResult(
+        level="no_known_threat", reasons=["검사 범위 내 위협 미탐지"],
+        evidence_ids=list(dict.fromkeys(item.id for item in evidence)),
+        limitations=list(sandbox.limitations),
+    )
 
 
 class PublicScanRequest(ScanRequest):
@@ -437,6 +495,7 @@ def create_public_app(*, threat_check: ThreatCheck | None = None,
             evidence.extend(cloud_evidence)
         brand_result, verdict = await _brand_report(current_brand_analyzer(), scan_id, sandbox, verdict,
                                                     png, evidence, deadline)
+        verdict = _final_verdict(scan_id, static, sandbox, brand_result, verdict, png, evidence)
         report = ScanReport(
             scan_id=scan_id, status="completed", mode="sandbox" if cloud_enabled else "static", requested_url=request.url,
             static_analysis=static, evidence=evidence, verdict=verdict, updated_at=datetime.now(timezone.utc),

@@ -2,7 +2,7 @@
 
 ## 현재 상태
 
-2026-10-31 Phishpedia 연동 Production 배포 `dpl_EuMfggrL7Jn5xiGEd8uFG5eP8EdK`가 `READY`이며
+2026-10-31 정상 판정 정책을 반영한 Production 배포 `dpl_GSzNCFoF8vxE14HmrX3afjdeQHmf`가 `READY`이며
 [공개 서비스](https://qr-guard-five.vercel.app/)에 모델 코드와 서버 전용 스냅샷 설정을 반영했습니다.
 앞선 `dpl_6yyy5mB1ydQqDPATJswgh6oeQEzK`에서 실제 Chromium 방문·PNG 응답을 확인했습니다.
 현재 실행 소스는 같은 runner와 고정 의존성을 관리형 VM에 준비한 **Sandbox 스냅샷**입니다.
@@ -145,8 +145,8 @@ node scripts/prepare-vercel.mjs --public --cloud-preview
 
 화면 검증은 390×844 viewport에서 수행했으며 최신 프런트 서비스 49개·UI 22개와 API 255개 테스트가 통과했습니다.
 
-`example.com`의 최종 판정은 브랜드 모델 미연동으로 `unknown`을 유지했습니다. 관찰 완료를
-정상 판정으로 바꾸지 않습니다. 실제 휴대전화 하드웨어의 카메라 QR 촬영은 아직 검증하지
+당시 `example.com`의 최종 판정은 브랜드 모델 미연동으로 `unknown`을 유지했습니다. 그 방문의
+관찰 완료만으로 정상 판정으로 바꾸지는 않았습니다. 실제 휴대전화 하드웨어의 카메라 QR 촬영은 아직 검증하지
 않았습니다. 모바일 브라우저 화면 검증과 하드웨어 촬영, 임의 악성 사이트 운영 안전성은 구분합니다.
 
 ## Phishpedia 모델 설치 진행
@@ -185,9 +185,19 @@ URL·PNG·분석 결과·자격 증명을 넣지 않습니다. 사용자 지시�
 URL만 처리하고 정리되며, 원본에는 검사 데이터나 자격 증명을 저장하지 않습니다.
 
 식별 브랜드의 기준 도메인과 실제 도착 도메인이 다르면 연결된 모델 근거와 함께
-`suspicious`로 처리합니다. 브랜드 미식별·미설정·분석 실패는 `unknown`을 유지하고,
-브랜드 일치도 공식 운영이나 안전 인증으로 확대하지 않습니다. Google 목록 미일치만으로
-정상 접속을 허용하지 않으며 알려진 위협의 위험 판정을 우선합니다. 설치·배포 상태는
+`suspicious`로 처리합니다. 알려진 위협의 위험 판정을 우선합니다. 최초·최종 주소의 Google 조회가
+모두 `checked`·`matched: false`이고, 격리 브라우저 검사가 유효한 PNG·실제 최종 URL과 함께
+`completed`이며, Phishpedia도 `completed`이고 `low`·`medium`·`high` 위험 신호가 없으면
+`no_known_threat`로 처리합니다. 프런트는 이를 `clear`로 변환해 **검사 범위 내 위협 미탐지**와
+**사이트 들어가기** 버튼을 표시합니다. 모델의 `brand_domain_match`와 `brand_unidentified`는
+모두 완료 결과로 인정하며, 미식별 사실은 모델 범위의 한계와 함께 `info` 관찰로 남깁니다.
+비밀번호 필드 존재 자체도 `info` 관찰이므로 단독 보류 사유가 아닙니다.
+
+Google 조회 실패·미확인, 모델 미설정·실패·생략, 불완전한 브라우저 검사는 `unknown`으로
+보류합니다. 브랜드 일치나 미식별, Google 목록 미일치만으로 공식 운영이나 완전한 안전을
+인증하지 않습니다. 이번 정상 판정 처리 변경은 사용자 지시에 따라 테스트·구문 검사·기능
+검증을 실행하지 않았습니다. 해당 정책의 Production 배포 `dpl_GSzNCFoF8vxE14HmrX3afjdeQHmf`는
+`READY`이며 기존 공개 주소에 연결됐습니다. 배포 상태만 확인했으며 실제 검사 API 호출이나 화면 테스트는 하지 않았습니다. 설치·배포 상태는
 실제 탐지 성공이나 성능 검증을 뜻하지 않습니다. 이번 모델 연동은 사용자 요청으로
 테스트·샘플 추론·기능 검증을 생략했습니다.
 
