@@ -2,6 +2,9 @@
 
 QR에 담긴 주소를 사용자 기기에서 바로 열지 않고 먼저 검사하는 해커톤 서비스입니다. 공개 서비스는 요청별 클라우드 VM에서 Worker를 실행해 사이트 화면과 관찰 결과를 제공합니다. 기존 로컬 Docker 개발 경로도 유지합니다.
 
+## Demo
+[qr-guard-five.vercel.app](https://qr-guard-five.vercel.app)
+
 ## 구현된 흐름
 
 - **모바일 프런트:** HTML·CSS·순수 JavaScript ES Modules, Web Components와 open Shadow DOM으로 QR 촬영 → 검사 중 → 결과의 세 화면을 제공합니다. QR 인식은 브라우저의 `BarcodeDetector`를 사용하며 직접 입력도 지원합니다. 프로토콜 없는 웹 주소에는 입력 단계에서만 `https://`를 보완합니다.
