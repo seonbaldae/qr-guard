@@ -8,6 +8,7 @@ RUN npm ci --prefix /home/pwuser/worker-deps --omit=dev --ignore-scripts --no-au
 ENV NODE_PATH=/home/pwuser/worker-deps/node_modules
 
 COPY worker.cjs .
+COPY egress-tunnel.cjs .
 COPY observer.cjs .
 COPY network-analyzer.cjs redirect-analyzer.cjs dom-analyzer.cjs ./
 COPY verdict.cjs .

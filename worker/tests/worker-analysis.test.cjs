@@ -10,9 +10,13 @@ const { EventEmitter } = require("node:events");
 const workerDirectory = path.resolve(__dirname, "..");
 const normalUrl = "http://127.0.0.1:4000/demo/normal";
 
-function mount({ failScreenshot = false, holdDom = false, failDom = false, blockedNavigation = false } = {}) {
+function mount({ failScreenshot = false, holdDom = false, failDom = false, blockedNavigation = false,
+  publicPreview = false, targetUrl = normalUrl } = {}) {
   let handler;
   let routeHandler;
+  let socketHandler;
+  let launchOptions;
+  let contextOptions;
   const scheduled = [];
   const files = new Map();
   let releaseDom;
@@ -22,18 +26,18 @@ function mount({ failScreenshot = false, holdDom = false, failDom = false, block
   const domEntered = new Promise(resolve => { domStarted = resolve; });
   const page = new EventEmitter();
   const context = new EventEmitter();
-  const frame = { url: () => normalUrl };
+  const frame = { url: () => targetUrl, page: () => page };
   const request = {
-    url: () => normalUrl, method: () => "GET", resourceType: () => "document",
+    url: () => targetUrl, method: () => "GET", resourceType: () => "document", postDataBuffer: () => null,
     isNavigationRequest: () => true, frame: () => frame, redirectedFrom: () => null,
     failure: () => null,
   };
   const response = {
-    url: () => normalUrl, request: () => request, status: () => 200,
+    url: () => targetUrl, request: () => request, status: () => 200,
     headers: () => ({}), headerValue: async () => null,
   };
   page.mainFrame = () => frame;
-  page.url = () => normalUrl;
+  page.url = () => targetUrl;
   page.locator = () => ({ evaluateAll: async () => [], count: async () => 0 });
   page.goto = async () => {
     assert.ok(page.listenerCount("request") > 0, "listeners must precede navigation");
@@ -54,8 +58,9 @@ function mount({ failScreenshot = false, holdDom = false, failDom = false, block
     files.set(target, Buffer.from("explicit-unit-test-image-double"));
   };
   context.route = async (_pattern, callback) => { routeHandler = callback; };
+  context.routeWebSocket = async (_pattern, callback) => { socketHandler = callback; };
   context.newPage = async () => page;
-  const browser = { newContext: async () => context, close: async () => {} };
+  const browser = { newContext: async options => { contextOptions = options; return context; }, close: async () => {} };
   vm.runInNewContext(fs.readFileSync(path.join(workerDirectory, "worker.cjs"), "utf8"), {
     require(name) {
       if (name === "node:http") return { createServer(callback) {
@@ -67,7 +72,7 @@ function mount({ failScreenshot = false, holdDom = false, failDom = false, block
         rename: async (from, to) => { files.set(to, files.get(from)); files.delete(from); },
         readFile: async target => files.get(target),
       };
-      if (name === "playwright") return { chromium: { launch: async () => browser } };
+      if (name === "playwright") return { chromium: { launch: async options => { launchOptions = options; return browser; } } };
       if (name === "./dom-analyzer.cjs") return { createDomAnalyzer() { return {
         async collect() {
           domStarted();
@@ -82,7 +87,7 @@ function mount({ failScreenshot = false, holdDom = false, failDom = false, block
       if (name.startsWith("./")) return require(path.join(workerDirectory, name));
       return require(name);
     },
-    URL, Buffer,
+    URL, Buffer, process: { env: { QR_GUARD_PUBLIC_PREVIEW: publicPreview ? "true" : "false" } },
     console: { log() {}, error() {} },
     setImmediate: callback => scheduled.push(callback),
     setTimeout(callback, delay) {
@@ -125,7 +130,17 @@ function mount({ failScreenshot = false, holdDom = false, failDom = false, block
       timer = setTimeout(() => reject(new Error("DOM collector was not called")), 1000);
     })]); } finally { clearTimeout(timer); }
   }
-  return { call, runJob, startJob, waitForJob, waitForDom, releaseDom, page, context, files };
+  async function policy(method, url, body = null, ownPage = true) {
+    let outcome;
+    const probe = { ...request, method: () => method, url: () => url, postDataBuffer: () => body,
+      frame: () => ownPage ? frame : { page: () => ({}) } };
+    await routeHandler({ request: () => probe, continue: async () => { outcome = "continue"; },
+      abort: async () => { outcome = "abort"; } });
+    return outcome;
+  }
+  return { call, runJob, startJob, waitForJob, waitForDom, releaseDom, page, context, files, policy,
+    get launchOptions() { return launchOptions; }, get contextOptions() { return contextOptions; },
+    socketHandler: () => socketHandler };
 }
 
 test("jobs 202 -> completed -> image 200 includes additive analysis fields", async () => {
@@ -207,4 +222,38 @@ test("actual policy hook marks blocked navigation without changing final URL", a
   assert.equal(job.redirectAnalysis.finalUrl, normalUrl);
   assert.equal(job.redirectAnalysis.redirectChain[0].blocked, true);
   assert.equal(JSON.stringify(job).includes("secret-sentinel"), false);
+});
+
+test("public previews use the loopback proxy and retain exact committed destination", async () => {
+  const targetUrl = "https://example.com/path?demo=visible-only-to-private-job";
+  const worker = mount({ publicPreview: true, targetUrl });
+  assert.equal((await worker.call("POST", "/internal/jobs", { scanId: "integration", url: targetUrl, timeoutMs: 20000 })).status, 202);
+  const job = await worker.runJob();
+  assert.equal(job.finalUrl, targetUrl);
+  assert.equal(job.redirectAnalysis.finalUrl, "https://example.com/path");
+  assert.equal(worker.contextOptions.proxy.server, "http://127.0.0.1:3128");
+  assert.equal(worker.contextOptions.acceptDownloads, false);
+  assert.equal(worker.contextOptions.serviceWorkers, "block");
+  assert.ok(worker.launchOptions.args.includes("--proxy-bypass-list=<-loopback>"));
+  assert.equal(worker.launchOptions.chromiumSandbox, true);
+  assert.equal(await worker.policy("GET", "https://static.example.com/style.css"), "continue");
+  assert.equal(await worker.policy("HEAD", "http://example.com/"), "continue");
+  assert.equal(await worker.policy("POST", "https://example.com/login", Buffer.from("fake-body")), "abort");
+  assert.equal(await worker.policy("GET", "https://example.com/", Buffer.from("fake-body")), "abort");
+  assert.equal(await worker.policy("GET", "https://example.com/", null, false), "abort");
+  for (const url of [normalUrl, "http://127.1/", "http://169.254.169.254/", "http://10.0.0.1/",
+    "http://[::1]/", "https://example.com:444/", "https://user:pass@example.com/", "ws://example.com/", "file:///etc/passwd"]) {
+    assert.equal(await worker.policy("GET", url), "abort", url);
+  }
+  let socketClosed = false;
+  worker.socketHandler()({ close() { socketClosed = true; } });
+  assert.equal(socketClosed, true);
+});
+
+test("public jobs reject URL repairs, private addresses and credentials before browser execution", async () => {
+  const worker = mount({ publicPreview: true });
+  for (const url of ["http://localhost/", "https://x.local/", "http://127.1/", "http://[::1]/", "http://10.0.0.1/",
+    "https://example.com:8080/", "https://@example.com/", "https:example.com", "https://example.com\\@127.0.0.1/", "javascript:alert(1)"]) {
+    assert.equal((await worker.call("POST", "/internal/jobs", { scanId: "integration", url, timeoutMs: 20000 })).status, 422, url);
+  }
 });

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QR Guard 활성 URL 데모 검증</title>
+    <link rel="stylesheet" href="../../src/styles/global.css">
+    <style>
+      .test-report { max-width:900px; margin:auto; padding:28px; font:14px/1.7 system-ui,sans-serif; }
+      [data-pass="true"] { color:#096343; } [data-pass="false"] { color:#b42318; }
+    </style>
+  </head>
+  <body>
+    <section class="test-report">
+      <h1>활성 URL 데모 검증</h1>
+      <p>활성화한 임시 소스 사본에서 실행합니다. fetch와 새 창 열기를 차단하며 실제 검사나 외부 접속을 하지 않습니다.</p>
+      <p id="summary" role="status" aria-live="polite">검증 중…</p>
+      <ol id="results"></ol>
+    </section>
+    <div id="fixture"></div>
+    <script type="module" src="./url-verdict-demo.js"></script>
+  </body>
+</html>
