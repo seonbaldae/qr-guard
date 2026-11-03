@@ -1,6 +1,8 @@
-# Docker 브라우저 Worker
+# 로컬 Docker 브라우저 Worker
 
 `worker.cjs`가 Playwright·Chromium으로 페이지를 방문해 PNG와 DOM·네트워크·리다이렉트 관찰을 반환합니다. FastAPI의 `app/worker.py`가 작업 생성·폴링·이미지 조회를 연결하고, `app/phishpedia.py`가 스크린샷을 별도의 네트워크 차단 모델 컨테이너에서 분석합니다.
+
+이 문서는 로컬 Docker 통합 실행을 설명합니다. 공개 Vercel 서비스는 별도의 브라우저·모델 Sandbox 스냅샷을 사용하며, 실행 구조와 배포 이력은 [클라우드 미리보기](../docs/cloud-preview.md)를 따릅니다.
 
 ## 권장 실행
 
@@ -42,22 +44,28 @@ API는 컨테이너 안의 loopback HTTP 서버에 제한된 `docker exec` 요�
 공개 `example.com`을 대상으로 실제 Google 조회·최종 URL·PNG·프런트 결과 표시를 확인했고, 컨테이너의 직접 메타데이터 접근 차단도 확인했습니다. 이 기능은 제한된 해커톤용 로컬 미리보기입니다. VM 수준 격리, 브라우저 탈출 방어, 임의 악성 사이트의 운영 안전성 검증이 완료됐다고 설명하지 마세요.
 
 ## Phishpedia
+
 외부 소스, 모델 가중치, 브랜드 자료와 캐시는 Git에 포함하지 않습니다.
 Docker 빌드가 `PHISHPEDIA_REVISION`에 기록된 커밋을 직접 받고 로컬 패치를 적용합니다.
 팀원이 별도로 `third_party/Phishpedia`나 `.cache/*.npy`를 준비할 필요가 없습니다.
 
 저장소의 `worker` 디렉터리에서 순서대로 빌드합니다.
 
-    docker build --platform linux/amd64 \
-      -f Dockerfile.phishpedia \
-      -t seonbaldae-phishpedia-env .
+```sh
+docker build --platform linux/amd64 \
+  -f Dockerfile.phishpedia \
+  -t seonbaldae-phishpedia-env .
 
-    docker build --platform linux/amd64 \
-      -f Dockerfile.phishpedia-model \
-      -t seonbaldae-phishpedia .
+docker build --platform linux/amd64 \
+  -f Dockerfile.phishpedia-model \
+  -t seonbaldae-phishpedia .
+```
 
 두 번째 이미지에는 모델, 기준 로고 자료, `LOGO_FEATS.npy`, `LOGO_FILES.npy`가 모두
-포함됩니다. 이후 `scan.cjs`는 호스트 캐시를 마운트하지 않습니다.
+포함됩니다. 이후 `scan.cjs`는 호스트 캐시를 마운트하지 않습니다. API가 별도 소스 마운트
+없이 실행할 수 있도록 `run-phishpedia.py`, `analyze-brand.py`도 모델 이미지에 포함합니다.
+
+현재 개발 환경은 ARM Mac에서 `linux/amd64` 에뮬레이션을 사용합니다.
 
 ## 이미지 빌드
 
@@ -79,9 +87,9 @@ docker build -f worker/Dockerfile.worker -t qr-guard-worker:local worker
 | `GET /internal/jobs/{scanId}` | 같은 검사 ID의 작업·관찰 상태 조회 |
 | `GET /internal/jobs/{scanId}/screenshot` | 준비된 PNG 조회 |
 
-공개 API와 Worker는 같은 `scanId`를 사용합니다. API 어댑터는 생성 응답·폴링의 ID 일치, 상태, 최종 주소, HTTP 상태, 이미지 준비 여부와 MIME을 검사합니다. 응답은 6MiB, PNG는 4MiB·1600만 픽셀 이내로 제한하고 PNG 청크뿐 아니라 실제 픽셀 디코딩도 확인합니다. Worker의 임의 오류 메시지나 URL 토큰을 외부에 그대로 직렬화하지 않습니다.
+로컬 API와 Worker는 같은 `scanId`를 사용합니다. API 어댑터는 생성 응답·폴링의 ID 일치, 상태, 최종 주소, HTTP 상태, 이미지 준비 여부와 MIME을 검사합니다. 응답은 6MiB, PNG는 4MiB·1600만 픽셀 이내로 제한하고 PNG 청크뿐 아니라 실제 픽셀 디코딩도 확인합니다. Worker의 임의 오류 메시지나 URL 토큰을 외부에 그대로 직렬화하지 않습니다.
 
-공개 `sandboxAnalysis`는 이 내부 응답을 변환한 결과입니다. Worker 실패·차단·검사 제한은 정상으로 보정하지 않으며, 수집한 증거·한계와 함께 확인 불가를 반환할 수 있습니다. 클라이언트 취소는 현재 서버 작업 취소와 다릅니다.
+로컬 API 응답의 `sandboxAnalysis`는 이 내부 응답을 변환한 결과입니다. Worker 실패·차단·검사 제한은 정상으로 보정하지 않으며, 수집한 증거·한계와 함께 확인 불가를 반환할 수 있습니다. 클라이언트 취소는 현재 서버 작업 취소와 다릅니다.
 
 ## 관찰과 제한
 
@@ -93,8 +101,12 @@ Docker는 VM 수준의 격리를 보증하지 않습니다. 통제된 페이지�
 
 ## Phishpedia 판정 한계
 
-`Dockerfile.phishpedia`, `Dockerfile.phishpedia-model`, `PHISHPEDIA_REVISION`, `patches/`와 Python 스크립트가 재현 가능한 모델 이미지를 만듭니다. 외부 소스·모델 가중치·브랜드 자료·캐시는 저장소에 포함하지 않고 이미지 빌드 과정에서 고정된 소스 커밋과 모델 설치 스크립트로 준비합니다. 로고 유사도 분석은 운영 주체를 인증하지 않으며, 모델 미식별·분석 실패는 정상 판정 근거가 아닙니다.
+`Dockerfile.phishpedia`, `Dockerfile.phishpedia-model`, `PHISHPEDIA_REVISION`, `patches/`와 Python 스크립트가 재현 가능한 모델 이미지를 만듭니다. 외부 소스·모델 가중치·브랜드 자료·캐시는 저장소에 포함하지 않고 이미지 빌드 과정에서 고정된 소스 커밋과 모델 설치 스크립트로 준비합니다. 로고 유사도 분석은 운영 주체를 인증하지 않으며, 로컬 Docker·CLI 경로에서는 모델 미식별·분석 실패를 정상 판정 근거로 사용하지 않습니다.
+
+공개 서비스는 별도의 완료 조건에 따라 최초·최종 위협 조회, 브라우저 관찰과 모델 분석이 모두 끝나고 위험 신호가 없을 때 `no_known_threat`를 반환합니다. 공개 경로의 `brand_unidentified`는 완료된 관찰로 처리하지만, 모델 실패·미완료를 정상으로 보정하지 않습니다. 상세 조건은 [클라우드 판정 정책](../docs/cloud-preview.md#판정과-남은-범위)을 따릅니다.
 
 ## 검증
 
-`worker/tests/`의 분석 테스트, API의 Worker 계약·PNG·차단 회귀 검사, 실제 Docker의 통제된 페이지 PNG→API→프런트 연결을 구분해 확인합니다. 이번 로컬 통합에서는 실제 브라우저 촬영과 이미지 표시까지 확인했습니다. 실제 카메라·모바일 HTTPS·공개 Vercel 백엔드 연결·임의 악성 사이트 운영 검증은 포함하지 않습니다.
+기존 개발 기록에는 Worker 작업 처리·PNG 반환, Phishpedia 환경·모델 이미지 빌드와 로컬 분석 흐름, 패치 적용 자동화 확인이 포함됩니다. 로컬 API·프런트 통합에서도 실제 브라우저 촬영과 이미지 표시를 확인한 이력이 있습니다. 현재 코드는 `app/phishpedia.py`와 `app/service.py`에서 모델 결과를 로컬 API의 최종 판정에 연결합니다.
+
+이 이력은 이번 병합 결과를 검증한 것이 아닙니다. 사용자의 “테스트 하지 마” 지시에 따라 이번 충돌 해결에서는 테스트·구문 검사·이미지 빌드·샘플 추론·기능 검증을 실행하지 않았습니다. 실제 휴대전화 카메라·임의 악성 사이트 운영 안전성도 검증 완료로 간주하지 않습니다. 공개 Vercel 배포의 과거 검증과 이후 미검증 변경은 [별도 기록](../docs/cloud-preview.md)에서 구분합니다.
